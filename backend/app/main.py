@@ -125,13 +125,18 @@ async def health_check(db: Session = Depends(get_db)):
         redis_url = os.getenv("REDIS_URL")
         if redis_url:
             r = redis.from_url(redis_url)
-            r.ping()
-            services["redis"] = "connected"
+            if r:
+                r.ping()
+                services["redis"] = "connected"
+            else:
+                services["redis"] = "connection failed"
         else:
             services["redis"] = "not configured"
+    except ImportError:
+        services["redis"] = "redis library not installed"
     except Exception as e:
         services["redis"] = f"error: {str(e)}"
-        overall_status = "unhealthy"
+        # Не делаем систему unhealthy из-за Redis
     
     # Проверка файлового хранилища
     try:
