@@ -89,7 +89,7 @@ async def broadcast_update(message: dict):
             active_connections.remove(connection)
 
 # Подключение статических файлов
-frontend_path = Path(__file__).parent.parent.parent / "frontend"
+frontend_path = Path(__file__).parent.parent / "frontend"
 if frontend_path.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_path)), name="static")
 

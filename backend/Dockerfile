@@ -32,6 +32,9 @@ RUN pip install --upgrade pip \
 # Копируем код приложения
 COPY . .
 
+# Копируем frontend из родительской директории
+COPY ../frontend ./frontend
+
 # Создаем необходимые директории и устанавливаем права доступа
 RUN mkdir -p uploads temp exports logs \
     && chown -R appuser:appuser /app \
