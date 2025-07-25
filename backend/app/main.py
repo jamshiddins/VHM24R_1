@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 
 from .database import get_db, engine, init_db
-from .models import User, UploadedFile, Order, OrderChange, ProcessingSession
+from .models import User, UploadedFile, Order, OrderChange, TelegramSession
 from .schemas import *
 from .auth import get_current_user
 from .services.file_processor import EnhancedFileProcessor
