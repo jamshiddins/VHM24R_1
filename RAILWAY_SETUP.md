@@ -43,7 +43,7 @@ ADMIN_TELEGRAM_ID=Jamshiddin
 
 # DigitalOcean Spaces
 DO_SPACES_KEY=DO0092QW37F9Q2HEVKVU
-DO_SPACES_SECRET=dop_v1_1a20413d8dd3f7827a72efa19b2cbb766850258ddf44044c5546fe2e0a244de9
+DO_SPACES_SECRET=your-digitalocean-spaces-secret-key
 DO_SPACES_ENDPOINT=https://vhm24r1-files.fra1.digitaloceanspaces.com
 DO_SPACES_BUCKET=vhm24r1-files
 DO_SPACES_REGION=fra1
