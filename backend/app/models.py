@@ -1,113 +1,153 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey, JSON, Float
+from sqlalchemy import Column, Integer, String, Text, DECIMAL, TIMESTAMP, Boolean, ForeignKey, BIGINT
+from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
-from .database import Base
 import uuid
+from datetime import datetime
+from .database import Base
 
 class User(Base):
     __tablename__ = "users"
     
     id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(String, unique=True, index=True, nullable=False)
-    username = Column(String, nullable=True)
-    first_name = Column(String, nullable=True)
-    last_name = Column(String, nullable=True)
-    personal_link = Column(String, unique=True, index=True, nullable=False)
-    is_approved = Column(Boolean, default=False)
-    is_admin = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    last_active = Column(DateTime(timezone=True), server_default=func.now())
+    telegram_id = Column(BIGINT, unique=True, nullable=False, index=True)
+    username = Column(String(255))
+    first_name = Column(String(255))
+    last_name = Column(String(255))
+    status = Column(String(50), default='pending')  # pending, approved, blocked
+    role = Column(String(50), default='user')  # user, admin
+    personal_link = Column(String(255), unique=True, index=True)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    approved_at = Column(TIMESTAMP)
+    approved_by = Column(Integer, ForeignKey('users.id'))
+    last_active = Column(TIMESTAMP)
     
-    # Связи
-    orders = relationship("Order", back_populates="user")
-    uploaded_files = relationship("UploadedFile", back_populates="user")
-
-class Order(Base):
-    __tablename__ = "orders"
+    # Computed properties for backward compatibility
+    @property
+    def is_approved(self):
+        return self.status == 'approved'
     
-    id = Column(Integer, primary_key=True, index=True)
-    order_number = Column(String, unique=True, index=True, nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    status = Column(String, default="pending")  # pending, processing, completed, cancelled
-    original_filename = Column(String, nullable=False)
-    file_path = Column(String, nullable=False)
-    file_size = Column(Integer, nullable=False)
-    file_format = Column(String, nullable=False)
-    total_rows = Column(Integer, default=0)
-    processed_rows = Column(Integer, default=0)
-    progress_percentage = Column(Float, default=0.0)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    completed_at = Column(DateTime(timezone=True), nullable=True)
+    @property
+    def is_admin(self):
+        return self.role == 'admin'
     
-    # Метаданные файла
-    file_metadata = Column(JSON, nullable=True)
-    
-    # Связи
-    user = relationship("User", back_populates="orders")
-    changes = relationship("OrderChange", back_populates="order", cascade="all, delete-orphan")
-    files = relationship("UploadedFile", back_populates="order")
-
-class OrderChange(Base):
-    __tablename__ = "order_changes"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
-    row_number = Column(Integer, nullable=False)
-    column_name = Column(String, nullable=False)
-    old_value = Column(Text, nullable=True)
-    new_value = Column(Text, nullable=True)
-    change_type = Column(String, nullable=False)  # new, updated, filled, changed
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Связи
-    order = relationship("Order", back_populates="changes")
+    # Relationships
+    uploaded_files = relationship("UploadedFile", back_populates="uploader")
+    created_orders = relationship("Order", back_populates="creator")
 
 class UploadedFile(Base):
     __tablename__ = "uploaded_files"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
-    filename = Column(String, nullable=False)
-    original_filename = Column(String, nullable=False)
-    file_path = Column(String, nullable=False)
-    file_size = Column(Integer, nullable=False)
-    file_format = Column(String, nullable=False)
-    mime_type = Column(String, nullable=True)
-    upload_status = Column(String, default="uploading")  # uploading, completed, failed
-    spaces_url = Column(String, nullable=True)  # URL в DigitalOcean Spaces
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    filename = Column(String(500), nullable=False)
+    original_name = Column(String(500), nullable=False)
+    content_hash = Column(String(64), unique=True, nullable=False, index=True)
+    file_size = Column(BIGINT, nullable=False)
+    file_type = Column(String(50), nullable=False)
+    storage_path = Column(Text, nullable=False)
+    similarity_percent = Column(DECIMAL(5,2))
+    similar_file_id = Column(Integer, ForeignKey('uploaded_files.id'))
+    uploaded_by = Column(Integer, ForeignKey('users.id'), nullable=False)
+    uploaded_at = Column(TIMESTAMP, default=datetime.utcnow)
+    processed = Column(Boolean, default=False)
+    total_rows = Column(Integer, default=0)
+    new_rows = Column(Integer, default=0)
+    updated_rows = Column(Integer, default=0)
     
-    # Связи
-    user = relationship("User", back_populates="uploaded_files")
-    order = relationship("Order", back_populates="files")
+    # Relationships
+    uploader = relationship("User", back_populates="uploaded_files")
+    similar_file = relationship("UploadedFile", remote_side=[id])
+    orders = relationship("Order", back_populates="source_file")
+
+class Order(Base):
+    __tablename__ = "orders"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    order_number = Column(String(100), unique=True, nullable=False, index=True)
+    machine_code = Column(String(100), index=True)
+    address = Column(Text)
+    goods_name = Column(String(255))
+    taste_name = Column(String(100))
+    order_type = Column(String(100))
+    order_resource = Column(String(100))
+    order_price = Column(DECIMAL(12,2))
+    creation_time = Column(TIMESTAMP, index=True)
+    paying_time = Column(TIMESTAMP)
+    brewing_time = Column(TIMESTAMP)
+    delivery_time = Column(TIMESTAMP)
+    refund_time = Column(TIMESTAMP)
+    payment_status = Column(String(100))
+    brew_status = Column(String(100))
+    payment_type = Column(String(100), index=True)
+    match_status = Column(String(50), default='unmatched', index=True)
+    reason = Column(Text)
+    
+    # Метаданные
+    version = Column(Integer, default=1)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow, index=True)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_by = Column(Integer, ForeignKey('users.id'))
+    source_file_id = Column(Integer, ForeignKey('uploaded_files.id'))
+    
+    # JSON для дополнительных полей (как Text для SQLite)
+    additional_data = Column(Text)
+    
+    # Relationships
+    creator = relationship("User", back_populates="created_orders")
+    source_file = relationship("UploadedFile", back_populates="orders")
+    changes = relationship("OrderChange", back_populates="order", cascade="all, delete-orphan")
+
+class OrderChange(Base):
+    __tablename__ = "order_changes"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey('orders.id'), nullable=False, index=True)
+    field_name = Column(String(100), nullable=False, index=True)
+    old_value = Column(Text)
+    new_value = Column(Text)
+    change_type = Column(String(20), nullable=False)  # new, updated, filled, changed
+    changed_at = Column(TIMESTAMP, default=datetime.utcnow, index=True)
+    changed_by = Column(Integer, ForeignKey('users.id'))
+    source_file_id = Column(Integer, ForeignKey('uploaded_files.id'))
+    version = Column(Integer, nullable=False)
+    
+    # Relationships
+    order = relationship("Order", back_populates="changes")
+
+class ProcessingSession(Base):
+    __tablename__ = "processing_sessions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(36), default=lambda: str(uuid.uuid4()), unique=True, index=True)
+    status = Column(String(50), default='started')  # started, processing, completed, failed
+    total_files = Column(Integer, default=0)
+    processed_files = Column(Integer, default=0)
+    total_rows = Column(Integer, default=0)
+    processed_rows = Column(Integer, default=0)
+    errors = Column(Text)
+    started_at = Column(TIMESTAMP, default=datetime.utcnow)
+    completed_at = Column(TIMESTAMP)
+    created_by = Column(Integer, ForeignKey('users.id'))
+
+
+class UserToken(Base):
+    __tablename__ = "user_tokens"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    unique_token = Column(String(255), unique=True, nullable=False, index=True)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    expires_at = Column(TIMESTAMP)
+    is_active = Column(Boolean, default=True)
+    
+    # Relationships
+    user = relationship("User")
 
 class TelegramSession(Base):
     __tablename__ = "telegram_sessions"
     
     id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(String, index=True, nullable=False)
+    telegram_id = Column(BIGINT, index=True, nullable=False)
     session_token = Column(String, unique=True, index=True, nullable=False)
-    expires_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(TIMESTAMP, nullable=False)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-class SystemSettings(Base):
-    __tablename__ = "system_settings"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    key = Column(String, unique=True, index=True, nullable=False)
-    value = Column(Text, nullable=False)
-    description = Column(Text, nullable=True)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-class Analytics(Base):
-    __tablename__ = "analytics"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    event_type = Column(String, nullable=False)  # file_upload, order_created, user_registered, etc.
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
-    data = Column(JSON, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)

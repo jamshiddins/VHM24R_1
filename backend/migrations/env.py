@@ -37,7 +37,10 @@ target_metadata = Base.metadata
 
 def get_url():
     """Получает URL базы данных из переменных окружения"""
-    return DATABASE_URL or config.get_main_option("sqlalchemy.url")
+    url = DATABASE_URL or config.get_main_option("sqlalchemy.url")
+    if not url:
+        raise ValueError("Database URL not found in environment variables or alembic.ini")
+    return url
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -73,6 +76,9 @@ def run_migrations_online() -> None:
 
     """
     configuration = config.get_section(config.config_ini_section)
+    if configuration is None:
+        raise ValueError("Configuration section not found in alembic.ini")
+    
     configuration["sqlalchemy.url"] = get_url()
     
     connectable = engine_from_config(

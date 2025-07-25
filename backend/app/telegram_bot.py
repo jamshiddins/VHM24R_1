@@ -1,493 +1,777 @@
 import asyncio
-import logging
-from typing import Dict, List, Optional
-from datetime import datetime
 import os
-from dotenv import load_dotenv
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebApp
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import secrets
+import uuid
+from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from sqlalchemy.orm import Session
-
 from .database import SessionLocal
-from .crud import user_crud, order_crud, analytics_crud
-from . import schemas
+from . import crud
+from .telegram_auth import TelegramAuth
 
-load_dotenv()
-
-# Настройки бота
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8475088876:AAGCh21e0ohqPkX4M6Efe_Pra4pzQEznWmk")
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://vhm24r.railway.app")
-ADMIN_TELEGRAM_ID = "Jamshiddin"
-
-# Настройка логирования
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-class VHM24RBot:
-    """Улучшенный Telegram бот для системы VHM24R"""
+class EnhancedTelegramBot:
+    def __init__(self, token: str):
+        self.token = token
+        self.app = Application.builder().token(token).build()
+        self.telegram_auth = TelegramAuth()
+        
+        # ЕДИНСТВЕННЫЙ АДМИН - @Jamshiddin
+        self.ADMIN_USERNAME = "Jamshiddin"
+        self.ADMIN_CHAT_ID = None  # Будет установлен при первом обращении
+        
+        self.setup_handlers()
     
-    def __init__(self):
-        self.application = None
-        self.user_states: Dict[str, str] = {}
+    def setup_handlers(self):
+        """Настройка обработчиков команд"""
+        self.app.add_handler(CommandHandler("start", self.start_command))
+        self.app.add_handler(CallbackQueryHandler(self.handle_callback))
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
     
-    def get_db(self) -> Session:
-        """Получает сессию базы данных"""
-        return SessionLocal()
-    
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Обработчик команды /start"""
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /start с постоянным меню"""
         user = update.effective_user
-        chat_id = str(update.effective_chat.id)
+        if not user:
+            return
         
-        # Записываем аналитику
-        db = self.get_db()
-        try:
-            analytics_crud.create_event(
-                db,
-                schemas.AnalyticsCreate(
-                    event_type="bot_start",
-                    data={"telegram_id": str(user.id), "username": user.username}
-                )
-            )
-        finally:
-            db.close()
+        # Проверяем, является ли пользователь админом
+        is_admin = user.username is not None and user.username == self.ADMIN_USERNAME
         
-        # Проверяем, зарегистрирован ли пользователь
-        db = self.get_db()
+        if is_admin and not self.ADMIN_CHAT_ID:
+            self.ADMIN_CHAT_ID = user.id
+            await self.initialize_admin(user)
+        
+        db = SessionLocal()
         try:
-            db_user = user_crud.get_user_by_telegram_id(db, str(user.id))
+            db_user = crud.get_user_by_telegram_id(db, user.id)
             
             if not db_user:
-                # Создаем нового пользователя
-                user_create = schemas.UserCreate(
-                    telegram_id=str(user.id),
-                    username=user.username,
-                    first_name=user.first_name,
-                    last_name=user.last_name
-                )
-                db_user = user_crud.create_user(db, user_create)
-                
-                welcome_text = f"""
-🎉 Добро пожаловать в VHM24R, {user.first_name}!
-
-Вы успешно зарегистрированы в системе управления заказами.
-
-📋 Ваша персональная ссылка: 
-`{WEBAPP_URL}/u/{db_user.personal_link}`
-
-⚠️ ВАЖНО: Эта ссылка уникальна и предназначена только для вас. Не передавайте её другим лицам.
-
-{self._get_approval_status_text(db_user)}
-                """
+                # Новый пользователь
+                if is_admin:
+                    # Создаем админа сразу
+                    await self.create_admin_user(user, db)
+                    await self.show_admin_menu(update)
+                else:
+                    await self.show_registration_menu(update, user)
             else:
-                welcome_text = f"""
-👋 С возвращением, {user.first_name}!
+                # Существующий пользователь
+                if str(db_user.role) == 'admin':
+                    await self.show_admin_menu(update)
+                elif str(db_user.status) == 'approved':
+                    await self.show_user_menu(update, db_user)
+                elif str(db_user.status) == 'pending':
+                    await self.show_pending_status(update, db_user)
+                elif str(db_user.status) == 'blocked':
+                    await self.show_blocked_status(update)
+                    
+        finally:
+            db.close()
+    
+    async def initialize_admin(self, user):
+        """Инициализация единственного админа"""
+        welcome_admin = f"""
+👑 <b>Добро пожаловать, Администратор!</b>
 
-📋 Ваша персональная ссылка: 
-`{WEBAPP_URL}/u/{db_user.personal_link}`
+🎉 Вы являетесь единственным администратором системы VHM24R
+🔧 У вас есть полный доступ ко всем функциям
+📊 Система готова к управлению пользователями и мониторингу
 
-{self._get_approval_status_text(db_user)}
-                """
+<i>Используйте меню ниже для управления системой</i>
+"""
+        await self.send_message_with_parse(user.id, welcome_admin)
+    
+    async def create_admin_user(self, user, db):
+        """Создание записи админа в БД"""
+        admin_data = {
+            'telegram_id': user.id,
+            'username': user.username,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'status': 'approved',
+            'role': 'admin',
+            'approved_at': datetime.utcnow(),
+            'approved_by': None  # Самоодобрение админа
+        }
+        crud.create_user(db, admin_data)
+    
+    async def show_admin_menu(self, update: Update):
+        """Админское меню с inline кнопками"""
+        
+        # Получаем статистику для админа
+        db = SessionLocal()
+        try:
+            pending_count = len(crud.get_pending_users(db))
+            total_users = crud.get_total_users_count(db)
+            active_sessions = crud.get_active_sessions_count(db)
         finally:
             db.close()
         
-        keyboard = self._get_main_menu_keyboard(db_user)
+        admin_text = f"""
+👑 <b>ПАНЕЛЬ АДМИНИСТРАТОРА</b>
+
+📊 <b>Статистика системы:</b>
+👥 Всего пользователей: <b>{total_users}</b>
+⏳ Ожидают одобрения: <b>{pending_count}</b>
+🔄 Активных сессий: <b>{active_sessions}</b>
+
+<i>Выберите действие:</i>
+"""
         
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=keyboard,
-            parse_mode='Markdown'
-        )
-    
-    def _get_approval_status_text(self, user) -> str:
-        """Получает текст статуса одобрения пользователя"""
-        if user.is_admin:
-            return "👑 Вы являетесь администратором системы."
-        elif user.is_approved:
-            return "✅ Ваш аккаунт одобрен. Вы можете загружать файлы."
-        else:
-            return "⏳ Ваш аккаунт ожидает одобрения администратора."
-    
-    def _get_main_menu_keyboard(self, user) -> InlineKeyboardMarkup:
-        """Создает главное меню"""
-        buttons = []
-        
-        # Кнопка для открытия веб-приложения
-        if user.is_approved or user.is_admin:
-            buttons.append([
-                InlineKeyboardButton(
-                    "🌐 Открыть веб-приложение",
-                    web_app=WebApp(url=f"{WEBAPP_URL}/u/{user.personal_link}")
-                )
-            ])
-        
-        # Основные функции
-        buttons.extend([
+        keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("📊 Мои заказы", callback_data="my_orders"),
-                InlineKeyboardButton("📈 Статистика", callback_data="my_stats")
+                InlineKeyboardButton(f"⏳ Заявки ({pending_count})", callback_data="admin_pending"),
+                InlineKeyboardButton("👥 Все пользователи", callback_data="admin_users")
             ],
             [
-                InlineKeyboardButton("ℹ️ Информация", callback_data="info"),
-                InlineKeyboardButton("🆘 Помощь", callback_data="help")
+                InlineKeyboardButton("📊 Статистика системы", callback_data="admin_stats"),
+                InlineKeyboardButton("🔄 Активные сессии", callback_data="admin_sessions")
+            ],
+            [
+                InlineKeyboardButton("⚙️ Настройки доступа", callback_data="admin_settings"),
+                InlineKeyboardButton("📈 Мониторинг", callback_data="admin_monitoring")
+            ],
+            [
+                InlineKeyboardButton("🔗 Генерация ссылок", callback_data="admin_generate_links"),
+                InlineKeyboardButton("🚀 Войти в систему", callback_data="admin_login")
+            ],
+            [
+                InlineKeyboardButton("🔄 Обновить", callback_data="admin_menu")
             ]
         ])
         
-        # Админские функции
-        if user.is_admin:
-            buttons.append([
-                InlineKeyboardButton("👥 Управление пользователями", callback_data="admin_users"),
-                InlineKeyboardButton("📊 Аналитика системы", callback_data="admin_analytics")
-            ])
-        
-        return InlineKeyboardMarkup(buttons)
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                admin_text, 
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+        else:
+            if update.message:
+                await update.message.reply_text(
+                    admin_text, 
+                    parse_mode='HTML',
+                    reply_markup=keyboard
+                )
     
-    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Обработчик нажатий на кнопки"""
+    async def show_user_menu(self, update: Update, user_data):
+        """Пользовательское меню"""
+        
+        # Генерируем уникальную ссылку для пользователя
+        unique_link = await self.generate_unique_user_link(user_data.id)
+        
+        user_text = f"""
+✅ <b>Добро пожаловать, {user_data.first_name}!</b>
+
+🎉 Ваш аккаунт одобрен и готов к работе
+🔗 Ваша персональная ссылка для входа готова
+⚠️ <i>Не передавайте ссылку другим пользователям!</i>
+
+📊 <b>Доступные действия:</b>
+"""
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🚀 Войти в систему", url=unique_link)
+            ],
+            [
+                InlineKeyboardButton("📊 Мой статус", callback_data="user_status"),
+                InlineKeyboardButton("📈 Моя активность", callback_data="user_activity")
+            ],
+            [
+                InlineKeyboardButton("ℹ️ Справка", callback_data="user_help"),
+                InlineKeyboardButton("🔄 Обновить ссылку", callback_data="user_refresh_link")
+            ],
+            [
+                InlineKeyboardButton("🔄 Обновить меню", callback_data="user_menu")
+            ]
+        ])
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                user_text, 
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+        else:
+            if update.message:
+                await update.message.reply_text(
+                    user_text, 
+                    parse_mode='HTML',
+                    reply_markup=keyboard
+                )
+    
+    async def show_registration_menu(self, update: Update, user):
+        """Меню регистрации для новых пользователей"""
+        
+        registration_text = f"""
+👋 <b>Добро пожаловать, {user.first_name}!</b>
+
+🔐 <b>Система управления заказами VHM24R</b>
+
+📝 Для получения доступа к системе необходимо:
+1️⃣ Подать заявку на регистрацию
+2️⃣ Дождаться одобрения администратора
+3️⃣ Получить персональную ссылку для входа
+
+<i>Нажмите кнопку ниже для подачи заявки:</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📝 Подать заявку", callback_data="register_request")
+            ],
+            [
+                InlineKeyboardButton("ℹ️ Подробнее о системе", callback_data="system_info")
+            ]
+        ])
+        
+        if update.message:
+            await update.message.reply_text(
+                registration_text, 
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+    
+    async def show_pending_status(self, update: Update, user_data):
+        """Статус ожидания одобрения"""
+        
+        pending_text = f"""
+⏳ <b>Заявка на рассмотрении</b>
+
+👤 {user_data.first_name}, ваша заявка отправлена администратору
+📅 Дата подачи: {user_data.created_at.strftime('%d.%m.%Y %H:%M')}
+
+🔔 Вы получите уведомление сразу после одобрения
+💬 Администратор рассматривает заявки в порядке поступления
+
+<i>Пожалуйста, ожидайте...</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔄 Проверить статус", callback_data="check_status")
+            ],
+            [
+                InlineKeyboardButton("📞 Связаться с админом", callback_data="contact_admin")
+            ]
+        ])
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                pending_text, 
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+        else:
+            if update.message:
+                await update.message.reply_text(
+                    pending_text, 
+                    parse_mode='HTML',
+                    reply_markup=keyboard
+                )
+    
+    async def show_blocked_status(self, update):
+        """Статус заблокированного пользователя"""
+        blocked_text = """
+❌ <b>Доступ заблокирован</b>
+
+К сожалению, ваш доступ к системе был заблокирован администратором.
+
+📞 Для получения дополнительной информации обратитесь к администратору: @Jamshiddin
+"""
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(blocked_text, parse_mode='HTML')
+        else:
+            await update.message.reply_text(blocked_text, parse_mode='HTML')
+    
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик всех callback кнопок"""
         query = update.callback_query
+        if not query:
+            return
+            
         await query.answer()
         
-        user = update.effective_user
         data = query.data
+        if not data:
+            return
+            
+        user = query.from_user
+        if not user:
+            return
         
-        db = self.get_db()
-        try:
-            db_user = user_crud.get_user_by_telegram_id(db, str(user.id))
-            if not db_user:
-                await query.edit_message_text("❌ Пользователь не найден. Используйте /start для регистрации.")
+        # Админские действия
+        if data.startswith('admin_'):
+            if user.username != self.ADMIN_USERNAME:
+                await query.edit_message_text("❌ У вас нет прав администратора.")
                 return
             
-            # Обработка различных команд
-            if data == "my_orders":
-                await self._show_my_orders(query, db_user, db)
-            elif data == "my_stats":
-                await self._show_my_stats(query, db_user, db)
-            elif data == "info":
-                await self._show_info(query, db_user)
-            elif data == "help":
-                await self._show_help(query)
-            elif data == "admin_users" and db_user.is_admin:
-                await self._show_admin_users(query, db)
-            elif data == "admin_analytics" and db_user.is_admin:
-                await self._show_admin_analytics(query, db)
-            elif data == "back_to_main":
-                await self._show_main_menu(query, db_user)
-            elif data.startswith("approve_user_"):
-                user_id = int(data.split("_")[2])
-                await self._approve_user(query, user_id, db)
-            elif data.startswith("order_details_"):
-                order_id = int(data.split("_")[2])
-                await self._show_order_details(query, order_id, db)
+            await self.handle_admin_callback(query, data)
+        
+        # Пользовательские действия
+        elif data.startswith('user_'):
+            await self.handle_user_callback(query, data)
+        
+        # Общие действия
+        elif data == 'register_request':
+            await self.process_registration_request(query)
+        
+        elif data.startswith('approve_'):
+            await self.process_approval(query, data)
+        
+        elif data.startswith('reject_'):
+            await self.process_rejection(query, data)
+        
+        elif data.startswith('postpone_'):
+            await self.process_postpone(query, data)
+    
+    async def handle_admin_callback(self, query, data):
+        """Обработка админских callback"""
+        
+        if data == 'admin_menu':
+            await self.show_admin_menu(query)
+        
+        elif data == 'admin_pending':
+            await self.show_pending_users(query)
+        
+        elif data == 'admin_login':
+            await self.admin_login_to_system(query)
+    
+    async def show_pending_users(self, query):
+        """Показ пользователей на одобрении с расширенными кнопками"""
+        
+        db = SessionLocal()
+        try:
+            pending_users = crud.get_pending_users(db)
+            
+            if not pending_users:
+                await query.edit_message_text(
+                    "✅ <b>Нет пользователей на одобрении</b>\n\n<i>Все заявки обработаны</i>",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Назад в меню", callback_data="admin_menu")]
+                    ])
+                )
+                return
+            
+            # Показываем каждого пользователя отдельным сообщением
+            await query.edit_message_text(
+                f"⏳ <b>Пользователи на одобрении: {len(pending_users)}</b>",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Назад в меню", callback_data="admin_menu")]
+                ])
+            )
+            
+            for user in pending_users:
+                await self.show_user_approval_card(query.message.chat_id, user)
+                
         finally:
             db.close()
     
-    async def _show_my_orders(self, query, user, db: Session) -> None:
-        """Показывает заказы пользователя"""
-        orders = order_crud.get_orders(db, user_id=user.id, limit=10)
+    async def show_user_approval_card(self, chat_id, user):
+        """Карточка пользователя для одобрения"""
         
-        if not orders:
-            text = "📋 У вас пока нет заказов."
-        else:
-            text = "📋 Ваши последние заказы:\n\n"
-            for order in orders:
-                status_emoji = {
-                    "pending": "⏳",
-                    "processing": "🔄",
-                    "completed": "✅",
-                    "cancelled": "❌"
-                }.get(order.status, "❓")
-                
-                text += f"{status_emoji} {order.order_number}\n"
-                text += f"📁 {order.original_filename}\n"
-                text += f"📅 {order.created_at.strftime('%d.%m.%Y %H:%M')}\n"
-                if order.progress_percentage > 0:
-                    text += f"📊 Прогресс: {order.progress_percentage:.1f}%\n"
-                text += "\n"
+        user_info = f"""
+👤 <b>Заявка #{user.id}</b>
+
+📝 <b>Данные пользователя:</b>
+👤 Имя: <b>{user.first_name} {user.last_name or ''}</b>
+🔗 Username: @{user.username or 'не указан'}
+🆔 Telegram ID: <code>{user.telegram_id}</code>
+📅 Дата заявки: <b>{user.created_at.strftime('%d.%m.%Y %H:%M')}</b>
+
+⚡ <b>Выберите действие:</b>
+"""
         
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
+            [
+                InlineKeyboardButton("✅ ОДОБРИТЬ", callback_data=f"approve_{user.id}"),
+                InlineKeyboardButton("❌ ОТКЛОНИТЬ", callback_data=f"reject_{user.id}")
+            ],
+            [
+                InlineKeyboardButton("⏳ Отложить", callback_data=f"postpone_{user.id}")
+            ]
         ])
         
-        await query.edit_message_text(text, reply_markup=keyboard)
+        await self.app.bot.send_message(
+            chat_id=chat_id,
+            text=user_info,
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
     
-    async def _show_my_stats(self, query, user, db: Session) -> None:
-        """Показывает статистику пользователя"""
-        stats = user_crud.get_user_stats(db, user.id)
+    async def process_approval(self, query, data):
+        """Обработка одобрения пользователя"""
+        user_id = int(data.split('_')[1])
         
-        text = f"""
-📈 Ваша статистика:
-
-📋 Всего заказов: {stats.get('total_orders', 0)}
-✅ Завершенных заказов: {stats.get('completed_orders', 0)}
-📁 Загружено файлов: {stats.get('total_files_uploaded', 0)}
-
-📅 Дата регистрации: {user.created_at.strftime('%d.%m.%Y')}
-🕐 Последняя активность: {user.last_active.strftime('%d.%m.%Y %H:%M')}
-        """
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
-        ])
-        
-        await query.edit_message_text(text, reply_markup=keyboard)
-    
-    async def _show_info(self, query, user) -> None:
-        """Показывает информацию о системе"""
-        text = f"""
-ℹ️ Информация о VHM24R
-
-🎯 VHM24R - это система управления заказами для обработки файлов различных форматов.
-
-📋 Ваша персональная ссылка:
-`{WEBAPP_URL}/u/{user.personal_link}`
-
-📁 Поддерживаемые форматы загрузки:
-• CSV, XLS, XLSX
-• PDF, DOC, DOCX
-• JSON, XML
-• ZIP, RAR
-• TXT, TSV
-
-📤 Форматы экспорта:
-• CSV, XLSX, XLS
-• JSON, PDF
-
-🔒 Безопасность:
-• Персональные ссылки уникальны
-• Данные защищены шифрованием
-• Регулярные резервные копии
-
-💰 Стоимость: $10-25/месяц
-        """
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
-        ])
-        
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    
-    async def _show_help(self, query) -> None:
-        """Показывает справку"""
-        text = """
-🆘 Справка по использованию
-
-🌐 Веб-приложение:
-• Используйте свою персональную ссылку для доступа
-• Загружайте файлы через интерфейс
-• Отслеживайте прогресс обработки в реальном времени
-
-🤖 Telegram бот:
-• /start - главное меню
-• Просмотр заказов и статистики
-• Уведомления о статусе заказов
-
-📞 Поддержка:
-• Обратитесь к администратору @Jamshiddin
-• Опишите проблему подробно
-• Приложите скриншоты при необходимости
-
-🔧 Технические требования:
-• Максимальный размер файла: 100MB
-• Поддерживаемые браузеры: Chrome, Firefox, Safari
-• Стабильное интернет-соединение
-        """
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
-        ])
-        
-        await query.edit_message_text(text, reply_markup=keyboard)
-    
-    async def _show_admin_users(self, query, db: Session) -> None:
-        """Показывает пользователей для администратора"""
-        pending_users = user_crud.get_pending_users(db)
-        
-        if not pending_users:
-            text = "👥 Нет пользователей, ожидающих одобрения."
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
-            ])
-        else:
-            text = "👥 Пользователи, ожидающие одобрения:\n\n"
-            buttons = []
+        db = SessionLocal()
+        try:
+            # Одобряем пользователя
+            admin_id = self.ADMIN_CHAT_ID if self.ADMIN_CHAT_ID is not None else 0
+            approved_user = crud.approve_user(db, user_id, admin_id)
             
-            for user in pending_users[:10]:  # Показываем максимум 10
-                name = f"{user.first_name} {user.last_name or ''}".strip()
-                username = f"@{user.username}" if user.username else "без username"
-                text += f"👤 {name} ({username})\n"
-                text += f"📅 {user.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            if approved_user:
+                # Получаем фактические значения из объекта SQLAlchemy
+                user_id = getattr(approved_user, 'id')
+                user_telegram_id = getattr(approved_user, 'telegram_id')
+                user_username = getattr(approved_user, 'username')
                 
-                buttons.append([
-                    InlineKeyboardButton(
-                        f"✅ Одобрить {name}",
-                        callback_data=f"approve_user_{user.id}"
-                    )
-                ])
-            
-            buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")])
-            keyboard = InlineKeyboardMarkup(buttons)
-        
-        await query.edit_message_text(text, reply_markup=keyboard)
-    
-    async def _show_admin_analytics(self, query, db: Session) -> None:
-        """Показывает аналитику для администратора"""
-        summary = analytics_crud.get_analytics_summary(db, days=7)
-        
-        text = f"""
-📊 Аналитика системы (7 дней):
-
-👥 Пользователи:
-• Всего: {summary['total_users']}
-• Активных: {summary['active_users']}
-
-📋 Заказы:
-• Всего: {summary['total_orders']}
-• Завершенных: {summary['completed_orders']}
-
-📁 Файлы:
-• Обработано: {summary['total_files_processed']}
-
-⏱️ Среднее время обработки:
-{summary['average_processing_time']:.1f if summary['average_processing_time'] else 'Н/Д'} сек.
-
-📈 Популярные форматы:
-        """
-        
-        for format_name, count in list(summary['popular_file_formats'].items())[:5]:
-            text += f"• {format_name.upper()}: {count}\n"
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
-        ])
-        
-        await query.edit_message_text(text, reply_markup=keyboard)
-    
-    async def _approve_user(self, query, user_id: int, db: Session) -> None:
-        """Одобряет пользователя"""
-        user = user_crud.approve_user(db, user_id)
-        
-        if user:
-            # Уведомляем пользователя об одобрении
-            try:
-                await self.application.bot.send_message(
-                    chat_id=int(user.telegram_id),
-                    text=f"""
-✅ Поздравляем! Ваш аккаунт одобрен администратором.
-
-Теперь вы можете:
-• Загружать файлы через веб-приложение
-• Отслеживать прогресс обработки
-• Экспортировать результаты
-
-🌐 Ваша персональная ссылка:
-`{WEBAPP_URL}/u/{user.personal_link}`
-                    """,
-                    parse_mode='Markdown'
+                # Генерируем уникальную ссылку
+                unique_link = await self.generate_unique_user_link(user_id)
+                
+                # Обновляем сообщение админа
+                await query.edit_message_text(
+                    f"✅ <b>Пользователь одобрен!</b>\n\n"
+                    f"👤 @{user_username}\n"
+                    f"🔗 Ссылка отправлена пользователю\n"
+                    f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+                    parse_mode='HTML'
                 )
-            except Exception as e:
-                logger.error(f"Не удалось отправить уведомление пользователю {user.telegram_id}: {e}")
+                
+                # Уведомляем пользователя
+                approval_message = f"""
+🎉 <b>Ваша заявка ОДОБРЕНА!</b>
+
+✅ Поздравляем! Администратор одобрил ваш доступ к системе VHM24R
+🔗 Ваша персональная ссылка для входа готова
+⚠️ <b>НЕ ПЕРЕДАВАЙТЕ эту ссылку другим пользователям!</b>
+
+📊 Теперь вы можете:
+• Загружать файлы заказов
+• Просматривать аналитику
+• Экспортировать отчеты
+• Отслеживать изменения в реальном времени
+
+<i>Нажмите кнопку ниже для входа в систему:</i>
+"""
+                
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🚀 ВОЙТИ В СИСТЕМУ", url=unique_link)
+                    ]
+                ])
+                
+                await self.app.bot.send_message(
+                    chat_id=user_telegram_id,
+                    text=approval_message,
+                    parse_mode='HTML',
+                    reply_markup=keyboard
+                )
+                
+            else:
+                await query.edit_message_text("❌ Ошибка при одобрении пользователя.")
+                
+        finally:
+            db.close()
+    
+    async def process_rejection(self, query, data):
+        """Обработка отклонения пользователя"""
+        user_id = int(data.split('_')[1])
+        
+        db = SessionLocal()
+        try:
+            user = crud.get_user_by_id(db, user_id)
+            if user:
+                # Блокируем пользователя
+                crud.block_user(db, user_id)
+                
+                # Обновляем сообщение админа
+                await query.edit_message_text(
+                    f"❌ <b>Пользователь отклонен</b>\n\n"
+                    f"👤 @{user.username}\n"
+                    f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+                    parse_mode='HTML'
+                )
+                
+                # Уведомляем пользователя
+                rejection_message = f"""
+❌ <b>Заявка отклонена</b>
+
+К сожалению, администратор не может предоставить вам доступ к системе в данный момент.
+
+📞 Если у вас есть вопросы, обратитесь к администратору: @{self.ADMIN_USERNAME}
+
+<i>Спасибо за понимание!</i>
+"""
+                
+                await self.app.bot.send_message(
+                    chat_id=getattr(user, 'telegram_id'),
+                    text=rejection_message,
+                    parse_mode='HTML'
+                )
+                
+        finally:
+            db.close()
+    
+    async def process_postpone(self, query, data):
+        """Отложить рассмотрение заявки"""
+        user_id = int(data.split('_')[1])
+        
+        db = SessionLocal()
+        try:
+            user = crud.get_user_by_id(db, user_id)
+            if user:
+                await query.edit_message_text(
+                    f"⏳ <b>Заявка отложена</b>\n\n"
+                    f"👤 @{user.username}\n"
+                    f"📝 Заявка будет рассмотрена позже",
+                    parse_mode='HTML'
+                )
+        finally:
+            db.close()
+    
+    async def generate_unique_user_link(self, user_id: int) -> str:
+        """Генерация уникальной ссылки для пользователя"""
+        
+        # Создаем уникальный токен для пользователя
+        unique_token = secrets.token_urlsafe(32)
+        
+        # Создаем JWT токен с уникальным идентификатором
+        access_token = self.telegram_auth.create_access_token(
+            user_id, 
+            unique_id=unique_token,
+            expires_delta=timedelta(days=365)  # Ссылка действует год
+        )
+        
+        # Сохраняем токен в БД для проверки
+        db = SessionLocal()
+        try:
+            crud.save_user_unique_token(db, user_id, unique_token)
+        finally:
+            db.close()
+        
+        # Формируем уникальную ссылку
+        frontend_url = os.getenv('FRONTEND_URL', 'https://your-frontend.railway.app')
+        unique_link = f"{frontend_url}/auth/telegram?token={access_token}&uid={unique_token}"
+        
+        return unique_link
+    
+    async def handle_user_callback(self, query, data):
+        """Обработка пользовательских callback"""
+        user = query.from_user
+        
+        db = SessionLocal()
+        try:
+            db_user = crud.get_user_by_telegram_id(db, user.id)
             
+            if data == 'user_menu':
+                await self.show_user_menu(query, db_user)
+            
+            elif data == 'user_status':
+                await self.show_user_status(query, db_user)
+            
+            elif data == 'user_refresh_link':
+                await self.refresh_user_link(query, db_user)
+                
+        finally:
+            db.close()
+    
+    async def show_user_status(self, query, user_data):
+        """Показ статуса пользователя"""
+        
+        status_text = f"""
+📊 <b>Ваш статус в системе</b>
+
+👤 <b>Личные данные:</b>
+• Имя: {user_data.first_name} {user_data.last_name or ''}
+• Username: @{user_data.username or 'не указан'}
+• ID: <code>{user_data.telegram_id}</code>
+
+✅ <b>Доступ:</b>
+• Статус: <b>Одобрен</b> ✅
+• Роль: <b>Пользователь</b>
+• Дата одобрения: {user_data.approved_at.strftime('%d.%m.%Y') if user_data.approved_at else 'Не указана'}
+
+🔗 <b>Безопасность:</b>
+• Персональная ссылка: Активна
+• Последнее обновление: {user_data.updated_at.strftime('%d.%m.%Y %H:%M') if user_data.updated_at else 'Не указано'}
+"""
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔄 Обновить ссылку", callback_data="user_refresh_link")
+            ],
+            [
+                InlineKeyboardButton("🔙 Назад в меню", callback_data="user_menu")
+            ]
+        ])
+        
+        await query.edit_message_text(
+            status_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+    
+    async def refresh_user_link(self, query, user_data):
+        """Обновление ссылки пользователя"""
+        
+        # Генерируем новую уникальную ссылку
+        new_link = await self.generate_unique_user_link(user_data.id)
+        
+        refresh_text = f"""
+🔄 <b>Ссылка обновлена!</b>
+
+✅ Ваша новая персональная ссылка готова
+🔒 Старая ссылка больше не действует
+⚠️ <b>НЕ ПЕРЕДАВАЙТЕ ссылку другим!</b>
+
+<i>Используйте кнопку ниже для входа:</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🚀 ВОЙТИ ПО НОВОЙ ССЫЛКЕ", url=new_link)
+            ],
+            [
+                InlineKeyboardButton("🔙 Назад в меню", callback_data="user_menu")
+            ]
+        ])
+        
+        await query.edit_message_text(
+            refresh_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+    
+    async def process_registration_request(self, query):
+        """Обработка запроса на регистрацию"""
+        user = query.from_user
+        
+        db = SessionLocal()
+        try:
+            # Создаем пользователя
+            user_data = {
+                'telegram_id': user.id,
+                'username': user.username,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'status': 'pending'
+            }
+            
+            new_user = crud.create_user(db, user_data)
+            
+            # Уведомляем пользователя
             await query.edit_message_text(
-                f"✅ Пользователь {user.first_name} {user.last_name or ''} одобрен!",
+                f"""
+✅ <b>Заявка отправлена!</b>
+
+📝 Ваша заявка #{new_user.id} передана администратору
+⏳ Ожидайте одобрения
+🔔 Уведомление придет автоматически
+
+<i>Время рассмотрения: обычно до 24 часов</i>
+""",
+                parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("👥 Управление пользователями", callback_data="admin_users")],
-                    [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
+                    [InlineKeyboardButton("🔄 Проверить статус", callback_data="check_status")]
                 ])
             )
+            
+            # Уведомляем админа
+            await self.notify_admin_new_request(user_data, new_user.id)
+            
+        finally:
+            db.close()
+    
+    async def notify_admin_new_request(self, user_data, request_id):
+        """Уведомление админа о новой заявке"""
+        
+        admin_notification = f"""
+🔔 <b>НОВАЯ ЗАЯВКА #{request_id}</b>
+
+👤 <b>Пользователь:</b>
+• Имя: {user_data['first_name']} {user_data.get('last_name', '')}
+• Username: @{user_data.get('username', 'не указан')}
+• ID: <code>{user_data['telegram_id']}</code>
+• Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}
+
+⚡ <b>Требует действия!</b>
+"""
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ ОДОБРИТЬ", callback_data=f"approve_{request_id}"),
+                InlineKeyboardButton("❌ ОТКЛОНИТЬ", callback_data=f"reject_{request_id}")
+            ],
+            [
+                InlineKeyboardButton("⏳ Отложить", callback_data=f"postpone_{request_id}"),
+                InlineKeyboardButton("👥 Все заявки", callback_data="admin_pending")
+            ]
+        ])
+        
+        if self.ADMIN_CHAT_ID:
+            await self.app.bot.send_message(
+                chat_id=self.ADMIN_CHAT_ID,
+                text=admin_notification,
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+    
+    async def admin_login_to_system(self, query):
+        """Вход админа в систему"""
+        # Генерируем ссылку для админа
+        if self.ADMIN_CHAT_ID is not None:
+            admin_link = await self.generate_unique_user_link(self.ADMIN_CHAT_ID)
         else:
-            await query.edit_message_text("❌ Ошибка при одобрении пользователя.")
+            await query.edit_message_text("❌ Ошибка: ID администратора не установлен.")
+            return
+        
+        admin_login_text = """
+🚀 <b>Вход в систему для администратора</b>
+
+👑 Ваша административная ссылка готова
+🔒 Полный доступ ко всем функциям системы
+
+<i>Нажмите кнопку ниже:</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("👑 ВОЙТИ КАК АДМИН", url=admin_link)
+            ],
+            [
+                InlineKeyboardButton("🔙 Назад в меню", callback_data="admin_menu")
+            ]
+        ])
+        
+        await query.edit_message_text(
+            admin_login_text,
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
     
-    async def _show_main_menu(self, query, user) -> None:
-        """Показывает главное меню"""
-        text = f"""
-👋 Главное меню VHM24R
-
-{self._get_approval_status_text(user)}
-
-📋 Ваша персональная ссылка:
-`{WEBAPP_URL}/u/{user.personal_link}`
-        """
-        
-        keyboard = self._get_main_menu_keyboard(user)
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode='Markdown')
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка текстовых сообщений (перенаправление на меню)"""
+        await self.start_command(update, context)
     
-    async def send_order_notification(self, telegram_id: str, order_number: str, status: str, message: str = None) -> None:
-        """Отправляет уведомление о статусе заказа"""
-        status_emoji = {
-            "pending": "⏳",
-            "processing": "🔄",
-            "completed": "✅",
-            "cancelled": "❌"
-        }.get(status, "❓")
-        
-        status_text = {
-            "pending": "ожидает обработки",
-            "processing": "обрабатывается",
-            "completed": "завершен",
-            "cancelled": "отменен"
-        }.get(status, "неизвестен")
-        
-        text = f"""
-{status_emoji} Обновление заказа {order_number}
-
-Статус: {status_text}
-        """
-        
-        if message:
-            text += f"\n💬 {message}"
-        
+    async def send_message_with_parse(self, chat_id: int, text: str):
+        """Отправка сообщения с HTML разметкой"""
         try:
-            await self.application.bot.send_message(
-                chat_id=int(telegram_id),
-                text=text
+            await self.app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode='HTML'
             )
         except Exception as e:
-            logger.error(f"Не удалось отправить уведомление пользователю {telegram_id}: {e}")
+            print(f"Error sending message: {e}")
     
-    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Обработчик ошибок"""
-        logger.error(f"Exception while handling an update: {context.error}")
-    
-    def setup_handlers(self) -> None:
-        """Настраивает обработчики команд"""
-        self.application.add_handler(CommandHandler("start", self.start_command))
-        self.application.add_handler(CallbackQueryHandler(self.button_callback))
-        self.application.add_error_handler(self.error_handler)
-    
-    async def start_bot(self) -> None:
-        """Запускает бота"""
-        self.application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        self.setup_handlers()
+    def start_bot(self):
+        """Запуск бота"""
+        print(f"🤖 Telegram Bot starting...")
+        print(f"👑 Admin: @{self.ADMIN_USERNAME}")
         
-        logger.info("Запуск Telegram бота VHM24R...")
-        await self.application.initialize()
-        await self.application.start()
-        await self.application.updater.start_polling()
-    
-    async def stop_bot(self) -> None:
-        """Останавливает бота"""
-        if self.application:
-            await self.application.updater.stop()
-            await self.application.stop()
-            await self.application.shutdown()
-            logger.info("Telegram бот остановлен.")
+        # Создаем новый event loop для потока
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self.app.run_polling()
+        except Exception as e:
+            print(f"❌ Telegram Bot error: {e}")
 
-# Глобальный экземпляр бота
-bot_instance = VHM24RBot()
-
-# Функции для использования в других модулях
-async def send_order_notification(telegram_id: str, order_number: str, status: str, message: str = None):
-    """Отправляет уведомление о заказе"""
-    await bot_instance.send_order_notification(telegram_id, order_number, status, message)
-
-async def start_telegram_bot():
-    """Запускает Telegram бота"""
-    await bot_instance.start_bot()
-
-async def stop_telegram_bot():
-    """Останавливает Telegram бота"""
-    await bot_instance.stop_bot()
+# Запуск бота
+if __name__ == "__main__":
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "8475088876:AAGCh21e0ohqPkX4M6Efe_Pra4pzQEznWmk")
+    bot = EnhancedTelegramBot(bot_token)
+    bot.start_bot()

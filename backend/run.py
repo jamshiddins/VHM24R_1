@@ -37,7 +37,6 @@ def main():
         "host": host,
         "port": port,
         "reload": reload and debug,
-        "debug": debug,
         "access_log": True,
         "use_colors": True,
     }

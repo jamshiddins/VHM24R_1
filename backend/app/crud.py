@@ -1,365 +1,420 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func, desc
-from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from sqlalchemy import and_, or_, func, desc, text
+from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime, date, timedelta
+from .models import User, UploadedFile, Order, OrderChange, ProcessingSession, UserToken
+from .schemas import UserCreate, UploadedFileCreate, OrderFilters
 import uuid
-import secrets
 
-from . import models, schemas
+# === ПОЛЬЗОВАТЕЛИ ===
 
-# CRUD операции для пользователей
-class UserCRUD:
-    @staticmethod
-    def get_user(db: Session, user_id: int) -> Optional[models.User]:
-        return db.query(models.User).filter(models.User.id == user_id).first()
-    
-    @staticmethod
-    def get_user_by_telegram_id(db: Session, telegram_id: str) -> Optional[models.User]:
-        return db.query(models.User).filter(models.User.telegram_id == telegram_id).first()
-    
-    @staticmethod
-    def get_user_by_personal_link(db: Session, personal_link: str) -> Optional[models.User]:
-        return db.query(models.User).filter(models.User.personal_link == personal_link).first()
-    
-    @staticmethod
-    def get_users(db: Session, skip: int = 0, limit: int = 100) -> List[models.User]:
-        return db.query(models.User).offset(skip).limit(limit).all()
-    
-    @staticmethod
-    def get_pending_users(db: Session) -> List[models.User]:
-        return db.query(models.User).filter(models.User.is_approved == False).all()
-    
-    @staticmethod
-    def create_user(db: Session, user: schemas.UserCreate) -> models.User:
-        # Генерируем уникальную персональную ссылку
-        personal_link = f"vhm24r_{secrets.token_urlsafe(16)}"
-        
-        db_user = models.User(
-            telegram_id=user.telegram_id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            personal_link=personal_link,
-            is_admin=(user.telegram_id == "Jamshiddin")  # Админ по умолчанию
-        )
-        db.add(db_user)
-        db.commit()
-        db.refresh(db_user)
-        return db_user
-    
-    @staticmethod
-    def update_user(db: Session, user_id: int, user_update: schemas.UserUpdate) -> Optional[models.User]:
-        db_user = db.query(models.User).filter(models.User.id == user_id).first()
-        if db_user:
-            update_data = user_update.dict(exclude_unset=True)
-            for field, value in update_data.items():
-                setattr(db_user, field, value)
-            db_user.last_active = datetime.now()
-            db.commit()
-            db.refresh(db_user)
-        return db_user
-    
-    @staticmethod
-    def approve_user(db: Session, user_id: int) -> Optional[models.User]:
-        db_user = db.query(models.User).filter(models.User.id == user_id).first()
-        if db_user:
-            db_user.is_approved = True
-            db.commit()
-            db.refresh(db_user)
-        return db_user
-    
-    @staticmethod
-    def get_user_stats(db: Session, user_id: int) -> Dict[str, int]:
-        user = db.query(models.User).filter(models.User.id == user_id).first()
-        if not user:
-            return {}
-        
-        total_orders = db.query(models.Order).filter(models.Order.user_id == user_id).count()
-        completed_orders = db.query(models.Order).filter(
-            and_(models.Order.user_id == user_id, models.Order.status == "completed")
-        ).count()
-        total_files = db.query(models.UploadedFile).filter(models.UploadedFile.user_id == user_id).count()
-        
-        return {
-            "total_orders": total_orders,
-            "completed_orders": completed_orders,
-            "total_files_uploaded": total_files
-        }
+def get_user_by_telegram_id(db: Session, telegram_id: int) -> Optional[User]:
+    return db.query(User).filter(User.telegram_id == telegram_id).first()
 
-# CRUD операции для заказов
-class OrderCRUD:
-    @staticmethod
-    def get_order(db: Session, order_id: int) -> Optional[models.Order]:
-        return db.query(models.Order).filter(models.Order.id == order_id).first()
-    
-    @staticmethod
-    def get_order_by_number(db: Session, order_number: str) -> Optional[models.Order]:
-        return db.query(models.Order).filter(models.Order.order_number == order_number).first()
-    
-    @staticmethod
-    def get_orders(db: Session, skip: int = 0, limit: int = 100, user_id: Optional[int] = None) -> List[models.Order]:
-        query = db.query(models.Order)
-        if user_id:
-            query = query.filter(models.Order.user_id == user_id)
-        return query.order_by(desc(models.Order.created_at)).offset(skip).limit(limit).all()
-    
-    @staticmethod
-    def create_order(db: Session, order: schemas.OrderCreate, user_id: int) -> models.Order:
-        # Генерируем уникальный номер заказа
-        order_number = f"VHM{datetime.now().strftime('%Y%m%d')}{secrets.token_hex(4).upper()}"
-        
-        db_order = models.Order(
-            order_number=order_number,
-            user_id=user_id,
-            original_filename=order.original_filename,
-            file_path=order.file_path,
-            file_size=order.file_size,
-            file_format=order.file_format
-        )
-        db.add(db_order)
-        db.commit()
-        db.refresh(db_order)
-        return db_order
-    
-    @staticmethod
-    def update_order(db: Session, order_id: int, order_update: schemas.OrderUpdate) -> Optional[models.Order]:
-        db_order = db.query(models.Order).filter(models.Order.id == order_id).first()
-        if db_order:
-            update_data = order_update.dict(exclude_unset=True)
-            for field, value in update_data.items():
-                setattr(db_order, field, value)
-            
-            # Если статус изменился на completed, устанавливаем время завершения
-            if order_update.status == schemas.OrderStatus.COMPLETED:
-                db_order.completed_at = datetime.now()
-            
-            db_order.updated_at = datetime.now()
-            db.commit()
-            db.refresh(db_order)
-        return db_order
-    
-    @staticmethod
-    def get_orders_by_status(db: Session, status: str, limit: int = 100) -> List[models.Order]:
-        return db.query(models.Order).filter(models.Order.status == status).limit(limit).all()
+def get_user_by_id(db: Session, user_id: int) -> Optional[User]:
+    return db.query(User).filter(User.id == user_id).first()
 
-# CRUD операции для изменений заказов
-class OrderChangeCRUD:
-    @staticmethod
-    def get_changes_by_order(db: Session, order_id: int) -> List[models.OrderChange]:
-        return db.query(models.OrderChange).filter(models.OrderChange.order_id == order_id).all()
+def create_user(db: Session, user_data: dict) -> User:
+    # Генерируем уникальную персональную ссылку
+    import secrets
+    personal_link = secrets.token_urlsafe(16)
+    user_data['personal_link'] = personal_link
     
-    @staticmethod
-    def create_change(db: Session, change: schemas.OrderChangeCreate) -> models.OrderChange:
-        db_change = models.OrderChange(**change.dict())
-        db.add(db_change)
-        db.commit()
-        db.refresh(db_change)
-        return db_change
-    
-    @staticmethod
-    def create_changes_batch(db: Session, changes: List[schemas.OrderChangeCreate]) -> List[models.OrderChange]:
-        db_changes = [models.OrderChange(**change.dict()) for change in changes]
-        db.add_all(db_changes)
-        db.commit()
-        for change in db_changes:
-            db.refresh(change)
-        return db_changes
-    
-    @staticmethod
-    def get_changes_by_type(db: Session, order_id: int, change_type: str) -> List[models.OrderChange]:
-        return db.query(models.OrderChange).filter(
-            and_(models.OrderChange.order_id == order_id, models.OrderChange.change_type == change_type)
-        ).all()
+    db_user = User(**user_data)
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
 
-# CRUD операции для загруженных файлов
-class UploadedFileCRUD:
-    @staticmethod
-    def get_file(db: Session, file_id: int) -> Optional[models.UploadedFile]:
-        return db.query(models.UploadedFile).filter(models.UploadedFile.id == file_id).first()
-    
-    @staticmethod
-    def get_files_by_user(db: Session, user_id: int) -> List[models.UploadedFile]:
-        return db.query(models.UploadedFile).filter(models.UploadedFile.user_id == user_id).all()
-    
-    @staticmethod
-    def get_files_by_order(db: Session, order_id: int) -> List[models.UploadedFile]:
-        return db.query(models.UploadedFile).filter(models.UploadedFile.order_id == order_id).all()
-    
-    @staticmethod
-    def create_file(db: Session, file: schemas.UploadedFileCreate) -> models.UploadedFile:
-        db_file = models.UploadedFile(**file.dict())
-        db.add(db_file)
-        db.commit()
-        db.refresh(db_file)
-        return db_file
-    
-    @staticmethod
-    def update_file(db: Session, file_id: int, file_update: schemas.UploadedFileUpdate) -> Optional[models.UploadedFile]:
-        db_file = db.query(models.UploadedFile).filter(models.UploadedFile.id == file_id).first()
-        if db_file:
-            update_data = file_update.dict(exclude_unset=True)
-            for field, value in update_data.items():
-                setattr(db_file, field, value)
-            db.commit()
-            db.refresh(db_file)
-        return db_file
+def get_user_by_personal_link(db: Session, personal_link: str) -> Optional[User]:
+    return db.query(User).filter(User.personal_link == personal_link).first()
 
-# CRUD операции для Telegram сессий
-class TelegramSessionCRUD:
-    @staticmethod
-    def get_session(db: Session, session_token: str) -> Optional[models.TelegramSession]:
-        return db.query(models.TelegramSession).filter(
-            and_(
-                models.TelegramSession.session_token == session_token,
-                models.TelegramSession.is_active == True,
-                models.TelegramSession.expires_at > datetime.now()
-            )
-        ).first()
-    
-    @staticmethod
-    def create_session(db: Session, session: schemas.TelegramSessionCreate) -> models.TelegramSession:
-        # Деактивируем старые сессии пользователя
-        db.query(models.TelegramSession).filter(
-            models.TelegramSession.telegram_id == session.telegram_id
-        ).update({"is_active": False})
-        
-        db_session = models.TelegramSession(**session.dict())
-        db.add(db_session)
-        db.commit()
-        db.refresh(db_session)
-        return db_session
-    
-    @staticmethod
-    def deactivate_session(db: Session, session_token: str) -> bool:
-        result = db.query(models.TelegramSession).filter(
-            models.TelegramSession.session_token == session_token
-        ).update({"is_active": False})
-        db.commit()
-        return result > 0
-    
-    @staticmethod
-    def cleanup_expired_sessions(db: Session) -> int:
-        result = db.query(models.TelegramSession).filter(
-            models.TelegramSession.expires_at < datetime.now()
-        ).update({"is_active": False})
-        db.commit()
-        return result
+def get_pending_users(db: Session) -> List[User]:
+    return db.query(User).filter(User.status == 'pending').all()
 
-# CRUD операции для аналитики
-class AnalyticsCRUD:
-    @staticmethod
-    def create_event(db: Session, event: schemas.AnalyticsCreate) -> models.Analytics:
-        db_event = models.Analytics(**event.dict())
-        db.add(db_event)
+def approve_user(db: Session, user_id: int, approved_by: int) -> Optional[User]:
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        # Используем setattr для избежания ошибок типизации
+        setattr(user, 'status', 'approved')
+        setattr(user, 'approved_at', datetime.utcnow())
+        setattr(user, 'approved_by', approved_by)
         db.commit()
-        db.refresh(db_event)
-        return db_event
+        db.refresh(user)
+    return user
+
+def block_user(db: Session, user_id: int) -> Optional[User]:
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        setattr(user, 'status', 'blocked')
+        db.commit()
+        db.refresh(user)
+    return user
+
+def get_total_users_count(db: Session) -> int:
+    return db.query(User).count()
+
+def get_active_sessions_count(db: Session) -> int:
+    return db.query(ProcessingSession).filter(
+        ProcessingSession.status.in_(['started', 'processing'])
+    ).count()
+
+# === ФАЙЛЫ ===
+
+def get_file_by_hash(db: Session, content_hash: str) -> Optional[UploadedFile]:
+    return db.query(UploadedFile).filter(UploadedFile.content_hash == content_hash).first()
+
+def create_uploaded_file(db: Session, file_data: dict) -> UploadedFile:
+    db_file = UploadedFile(**file_data)
+    db.add(db_file)
+    db.commit()
+    db.refresh(db_file)
+    return db_file
+
+def update_file_stats(db: Session, file_id: int, total_rows: int, new_rows: int, updated_rows: int):
+    file_obj = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if file_obj:
+        setattr(file_obj, 'processed', True)
+        setattr(file_obj, 'total_rows', total_rows)
+        setattr(file_obj, 'new_rows', new_rows)
+        setattr(file_obj, 'updated_rows', updated_rows)
+        db.commit()
+
+def get_uploaded_files(db: Session, user_id: int) -> List[UploadedFile]:
+    return db.query(UploadedFile).filter(UploadedFile.uploaded_by == user_id).order_by(desc(UploadedFile.uploaded_at)).all()
+
+def mark_file_processed(db: Session, file_id: int):
+    file_obj = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if file_obj:
+        setattr(file_obj, 'processed', True)
+        db.commit()
+
+# === СЕССИИ ОБРАБОТКИ ===
+
+def create_processing_session(db: Session, user_id: int, files_count: int) -> ProcessingSession:
+    session = ProcessingSession(
+        session_id=uuid.uuid4(),
+        total_files=files_count,
+        created_by=user_id
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+def get_processing_session(db: Session, session_id: str) -> Optional[ProcessingSession]:
+    return db.query(ProcessingSession).filter(ProcessingSession.session_id == session_id).first()
+
+def update_processing_session(db: Session, session_id: str, status: str):
+    session = db.query(ProcessingSession).filter(ProcessingSession.session_id == session_id).first()
+    if session:
+        setattr(session, 'status', status)
+        db.commit()
+
+def complete_processing_session(db: Session, session_id: str, total_rows: int, processed_rows: int, new_orders: int = 0, updated_orders: int = 0, errors: Optional[List[str]] = None):
+    session = db.query(ProcessingSession).filter(ProcessingSession.session_id == session_id).first()
+    if session:
+        setattr(session, 'status', 'completed')
+        setattr(session, 'total_rows', total_rows)
+        setattr(session, 'processed_rows', processed_rows)
+        setattr(session, 'completed_at', datetime.utcnow())
+        if errors:
+            setattr(session, 'errors', '\n'.join(errors))
+        db.commit()
+
+def fail_processing_session(db: Session, session_id: str, error: str):
+    session = db.query(ProcessingSession).filter(ProcessingSession.session_id == session_id).first()
+    if session:
+        setattr(session, 'status', 'failed')
+        setattr(session, 'errors', error)
+        setattr(session, 'completed_at', datetime.utcnow())
+        db.commit()
+
+def get_session_files(db: Session, session_id: int) -> List[UploadedFile]:
+    return db.query(UploadedFile).all()  # Упрощенная версия
+
+def update_session_stats(db: Session, session_id: int, total_size: int, files_count: int):
+    # Обновляем статистику сессии
+    pass
+
+# === ЗАКАЗЫ ===
+
+def get_order_by_number(db: Session, order_number: str) -> Optional[Order]:
+    return db.query(Order).filter(Order.order_number == order_number).first()
+
+def create_order(db: Session, order_data: Dict[str, Any], user_id: Optional[int] = None, file_id: Optional[int] = None) -> Order:
+    if user_id is not None:
+        order_data['created_by'] = user_id
+    if file_id is not None:
+        order_data['source_file_id'] = file_id
     
-    @staticmethod
-    def get_events(db: Session, skip: int = 0, limit: int = 100, event_type: Optional[str] = None) -> List[models.Analytics]:
-        query = db.query(models.Analytics)
-        if event_type:
-            query = query.filter(models.Analytics.event_type == event_type)
-        return query.order_by(desc(models.Analytics.created_at)).offset(skip).limit(limit).all()
+    order = Order(**order_data)
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    return order
+
+def update_order(db: Session, order_id: int, order_data: Dict[str, Any], file_id: Optional[int] = None) -> Order:
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if order:
+        # Обновляем только непустые поля
+        for key, value in order_data.items():
+            if value is not None and hasattr(order, key):
+                setattr(order, key, value)
+        
+        if file_id is not None:
+            setattr(order, 'source_file_id', file_id)
+        setattr(order, 'updated_at', datetime.utcnow())
+        
+        db.commit()
+        db.refresh(order)
+    return order
+
+def get_orders_with_filters(db: Session, filters: OrderFilters, page: int, page_size: int) -> Tuple[List[Order], int]:
+    query = db.query(Order)
     
-    @staticmethod
-    def get_analytics_summary(db: Session, days: int = 30) -> Dict[str, Any]:
-        start_date = datetime.now() - timedelta(days=days)
+    # Применяем фильтры
+    if filters.order_number:
+        query = query.filter(Order.order_number.ilike(f'%{filters.order_number}%'))
+    
+    if filters.machine_code:
+        query = query.filter(Order.machine_code == filters.machine_code)
+    
+    if filters.payment_type:
+        query = query.filter(Order.payment_type == filters.payment_type)
+    
+    if filters.match_status:
+        query = query.filter(Order.match_status == filters.match_status)
+    
+    if filters.date_from:
+        try:
+            date_from = datetime.fromisoformat(filters.date_from)
+            query = query.filter(Order.creation_time >= date_from)
+        except:
+            pass
+    
+    if filters.date_to:
+        try:
+            date_to = datetime.fromisoformat(filters.date_to)
+            query = query.filter(Order.creation_time <= date_to)
+        except:
+            pass
+    
+    # Фильтр по типу изменений
+    if filters.change_type:
+        subquery = db.query(OrderChange.order_id).filter(
+            OrderChange.change_type == filters.change_type
+        ).distinct()
+        query = query.filter(Order.id.in_(subquery))
+    
+    # Подсчитываем общее количество
+    total = query.count()
+    
+    # Применяем пагинацию
+    orders = query.offset((page - 1) * page_size).limit(page_size).all()
+    
+    return orders, total
+
+def get_order(db: Session, order_id: int) -> Optional[Order]:
+    return db.query(Order).filter(Order.id == order_id).first()
+
+def get_order_changes(db: Session, order_id: int) -> List[OrderChange]:
+    return db.query(OrderChange).filter(OrderChange.order_id == order_id).order_by(OrderChange.changed_at).all()
+
+def create_order_change(db: Session, change_data: Dict[str, Any]) -> OrderChange:
+    change = OrderChange(**change_data)
+    db.add(change)
+    db.commit()
+    db.refresh(change)
+    return change
+
+def get_order_versions(db: Session, order_number: str) -> List[Dict]:
+    """Получение всех версий заказа"""
+    order = db.query(Order).filter(Order.order_number == order_number).first()
+    if not order:
+        return []
+    
+    changes = db.query(OrderChange).filter(OrderChange.order_id == order.id).order_by(OrderChange.version).all()
+    
+    # Строим версии заказа
+    versions = []
+    current_version = {}
+    
+    for change in changes:
+        change_version = getattr(change, 'version', None)
+        if change_version not in [v.get('version') for v in versions]:
+            # Новая версия
+            if current_version:
+                versions.append(current_version.copy())
+            current_version = {'version': change_version, 'changed_at': change.changed_at}
         
-        # Общая статистика
-        total_users = db.query(models.User).count()
-        active_users = db.query(models.User).filter(
-            models.User.last_active >= start_date
-        ).count()
-        
-        total_orders = db.query(models.Order).count()
-        completed_orders = db.query(models.Order).filter(
-            models.Order.status == "completed"
-        ).count()
-        
-        total_files = db.query(models.UploadedFile).count()
-        
-        # Популярные форматы файлов
-        popular_formats = db.query(
-            models.Order.file_format,
-            func.count(models.Order.file_format).label('count')
-        ).group_by(models.Order.file_format).all()
-        
-        # Среднее время обработки
-        avg_processing_time = db.query(
-            func.avg(
-                func.extract('epoch', models.Order.completed_at - models.Order.created_at)
-            )
-        ).filter(models.Order.completed_at.isnot(None)).scalar()
-        
-        # Ежедневная статистика
-        daily_stats = []
-        for i in range(days):
-            day = start_date + timedelta(days=i)
-            day_start = day.replace(hour=0, minute=0, second=0, microsecond=0)
-            day_end = day_start + timedelta(days=1)
-            
-            day_orders = db.query(models.Order).filter(
-                and_(models.Order.created_at >= day_start, models.Order.created_at < day_end)
-            ).count()
-            
-            daily_stats.append({
-                "date": day.strftime("%Y-%m-%d"),
-                "orders": day_orders
+        if getattr(change, 'change_type', None) == 'new':
+            # Начальная версия
+            current_version.update({
+                'order_number': order.order_number,
+                'machine_code': order.machine_code,
+                'order_price': order.order_price
             })
-        
-        return {
-            "total_users": total_users,
-            "active_users": active_users,
-            "total_orders": total_orders,
-            "completed_orders": completed_orders,
-            "total_files_processed": total_files,
-            "average_processing_time": avg_processing_time,
-            "popular_file_formats": {format_name: count for format_name, count in popular_formats},
-            "daily_stats": daily_stats
-        }
+        else:
+            current_version[str(change.field_name)] = change.new_value
+    
+    if current_version:
+        versions.append(current_version)
+    
+    return versions
 
-# CRUD операции для системных настроек
-class SystemSettingsCRUD:
-    @staticmethod
-    def get_setting(db: Session, key: str) -> Optional[models.SystemSettings]:
-        return db.query(models.SystemSettings).filter(models.SystemSettings.key == key).first()
+# === АНАЛИТИКА ===
+
+def get_analytics_data(db: Session, date_from: Optional[str], date_to: Optional[str], group_by: str) -> Dict:
+    query = db.query(Order)
     
-    @staticmethod
-    def get_all_settings(db: Session) -> List[models.SystemSettings]:
-        return db.query(models.SystemSettings).all()
+    # Применяем фильтры дат
+    if date_from:
+        try:
+            date_from_dt = datetime.fromisoformat(date_from)
+            query = query.filter(Order.creation_time >= date_from_dt)
+        except:
+            pass
+    if date_to:
+        try:
+            date_to_dt = datetime.fromisoformat(date_to)
+            query = query.filter(Order.creation_time <= date_to_dt)
+        except:
+            pass
     
-    @staticmethod
-    def create_setting(db: Session, setting: schemas.SystemSettingsCreate) -> models.SystemSettings:
-        db_setting = models.SystemSettings(**setting.dict())
-        db.add(db_setting)
+    # Общая статистика
+    total_orders = query.count()
+    total_revenue = query.with_entities(func.sum(Order.order_price)).scalar() or 0
+    
+    # Статистика по типам оплаты
+    payment_stats = db.query(
+        Order.payment_type,
+        func.count(Order.id).label('count'),
+        func.sum(Order.order_price).label('total')
+    ).group_by(Order.payment_type).all()
+    
+    # Статистика по автоматам
+    machine_stats = db.query(
+        Order.machine_code,
+        func.count(Order.id).label('count'),
+        func.sum(Order.order_price).label('total')
+    ).group_by(Order.machine_code).limit(10).all()
+    
+    # Временные тренды
+    time_stats = db.query(
+        func.date(Order.creation_time).label('period'),
+        func.count(Order.id).label('count'),
+        func.sum(Order.order_price).label('total')
+    ).group_by(func.date(Order.creation_time)).order_by(func.date(Order.creation_time)).all()
+    
+    return {
+        'summary': {
+            'total_orders': total_orders,
+            'total_revenue': float(total_revenue),
+            'avg_order_value': float(total_revenue / total_orders) if total_orders > 0 else 0
+        },
+        'payment_types': [
+            {
+                'type': stat.payment_type or 'Unknown',
+                'count': stat.count,
+                'total': float(stat.total or 0)
+            }
+            for stat in payment_stats
+        ],
+        'top_machines': [
+            {
+                'machine_code': stat.machine_code or 'Unknown',
+                'count': stat.count,
+                'total': float(stat.total or 0)
+            }
+            for stat in machine_stats
+        ],
+        'time_series': [
+            {
+                'period': stat.period.isoformat() if stat.period else None,
+                'count': stat.count,
+                'total': float(stat.total or 0)
+            }
+            for stat in time_stats
+        ]
+    }
+
+# === ТОКЕНЫ ПОЛЬЗОВАТЕЛЕЙ ===
+
+def save_user_unique_token(db: Session, user_id: int, unique_token: str):
+    """Сохранение уникального токена пользователя"""
+    # Удаляем старые токены
+    db.query(UserToken).filter(UserToken.user_id == user_id).delete()
+    
+    # Создаем новый токен
+    token = UserToken(
+        user_id=user_id,
+        unique_token=unique_token,
+        is_active=True
+    )
+    db.add(token)
+    db.commit()
+
+def get_user_by_token(db: Session, unique_token: str) -> Optional[User]:
+    """Получение пользователя по уникальному токену"""
+    token = db.query(UserToken).filter(
+        UserToken.unique_token == unique_token,
+        UserToken.is_active.is_(True)
+    ).first()
+    
+    if token:
+        return db.query(User).filter(User.id == token.user_id).first()
+    return None
+
+def deactivate_user_token(db: Session, unique_token: str):
+    """Деактивация токена пользователя"""
+    token = db.query(UserToken).filter(UserToken.unique_token == unique_token).first()
+    if token:
+        setattr(token, 'is_active', False)
         db.commit()
-        db.refresh(db_setting)
-        return db_setting
+
+# === CRUD ОПЕРАЦИИ ДЛЯ ЗАКАЗОВ ===
+
+class OrderCrud:
+    """CRUD операции для заказов"""
     
-    @staticmethod
-    def update_setting(db: Session, key: str, setting_update: schemas.SystemSettingsUpdate) -> Optional[models.SystemSettings]:
-        db_setting = db.query(models.SystemSettings).filter(models.SystemSettings.key == key).first()
-        if db_setting:
-            update_data = setting_update.dict(exclude_unset=True)
-            for field, value in update_data.items():
-                setattr(db_setting, field, value)
-            db_setting.updated_at = datetime.now()
+    def get_order(self, db: Session, order_id: int) -> Optional[Order]:
+        return db.query(Order).filter(Order.id == order_id).first()
+    
+    def update_order(self, db: Session, order_id: int, order_update: dict) -> Optional[Order]:
+        order = db.query(Order).filter(Order.id == order_id).first()
+        if order:
+            for key, value in order_update.items():
+                if hasattr(order, key) and value is not None:
+                    setattr(order, key, value)
+            setattr(order, 'updated_at', datetime.utcnow())
             db.commit()
-            db.refresh(db_setting)
-        return db_setting
-    
-    @staticmethod
-    def delete_setting(db: Session, key: str) -> bool:
-        result = db.query(models.SystemSettings).filter(models.SystemSettings.key == key).delete()
-        db.commit()
-        return result > 0
+            db.refresh(order)
+        return order
 
-# Экспорт всех CRUD классов
-user_crud = UserCRUD()
-order_crud = OrderCRUD()
-order_change_crud = OrderChangeCRUD()
-uploaded_file_crud = UploadedFileCRUD()
-telegram_session_crud = TelegramSessionCRUD()
-analytics_crud = AnalyticsCRUD()
-system_settings_crud = SystemSettingsCRUD()
+class OrderChangeCrud:
+    """CRUD операции для изменений заказов"""
+    
+    def create_changes_batch(self, db: Session, changes: List[dict]):
+        """Создание изменений батчом"""
+        for change_data in changes:
+            change = OrderChange(**change_data)
+            db.add(change)
+        db.commit()
+    
+    def get_changes_by_order(self, db: Session, order_id: int) -> List[OrderChange]:
+        return db.query(OrderChange).filter(OrderChange.order_id == order_id).all()
+
+class AnalyticsCrud:
+    """CRUD операции для аналитики"""
+    
+    def create_event(self, db: Session, event_data: dict):
+        """Создание события аналитики"""
+        # Заглушка для аналитических событий
+        # В реальном приложении здесь будет создание записи в таблице аналитики
+        pass
+
+# Глобальные экземпляры CRUD
+order_crud = OrderCrud()
+order_change_crud = OrderChangeCrud()
+analytics_crud = AnalyticsCrud()

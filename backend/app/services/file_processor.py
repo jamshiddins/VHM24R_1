@@ -36,15 +36,12 @@ except ImportError:
 
 try:
     from docx import Document
-    import python_docx
 except ImportError:
     Document = None
-    python_docx = None
 
 from sqlalchemy.orm import Session
 from ..database import SessionLocal
-from ..crud import order_crud, order_change_crud, analytics_crud
-from .. import schemas
+from .. import crud, schemas
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -88,47 +85,37 @@ class EnhancedFileProcessor:
         db = self.get_db()
         try:
             # Получаем информацию о заказе
-            order = order_crud.get_order(db, order_id)
+            order = crud.get_order(db, order_id)
             if not order:
                 raise ValueError(f"Заказ {order_id} не найден")
             
             # Обновляем статус заказа
-            order_crud.update_order(db, order_id, schemas.OrderUpdate(
-                status=schemas.OrderStatus.PROCESSING,
-                progress_percentage=0.0
-            ))
+            crud.update_order(db, order_id, {
+                "status": "processing",
+                "progress_percentage": 0.0
+            })
             
             # Определяем формат файла
             file_format = self._detect_file_format(file_path)
             logger.info(f"Обработка файла {file_path} формата {file_format}")
             
-            # Записываем аналитику
-            analytics_crud.create_event(db, schemas.AnalyticsCreate(
-                event_type="file_processing_started",
-                user_id=user_id,
-                order_id=order_id,
-                data={"file_format": file_format, "file_path": file_path}
-            ))
+            # Записываем аналитику (заглушка)
+            logger.info(f"Аналитика: начало обработки файла {file_format}")
             
             # Обрабатываем файл в зависимости от формата
             result = await self._process_by_format(file_path, file_format, order_id, db)
             
             # Обновляем заказ с результатами
-            order_crud.update_order(db, order_id, schemas.OrderUpdate(
-                status=schemas.OrderStatus.COMPLETED,
-                progress_percentage=100.0,
-                total_rows=result.get('total_rows', 0),
-                processed_rows=result.get('processed_rows', 0),
-                metadata=result.get('metadata', {})
-            ))
+            crud.update_order(db, order_id, {
+                "status": "completed",
+                "progress_percentage": 100.0,
+                "total_rows": result.get('total_rows', 0),
+                "processed_rows": result.get('processed_rows', 0),
+                "metadata": result.get('metadata', {})
+            })
             
-            # Записываем аналитику завершения
-            analytics_crud.create_event(db, schemas.AnalyticsCreate(
-                event_type="file_processing_completed",
-                user_id=user_id,
-                order_id=order_id,
-                data=result
-            ))
+            # Записываем аналитику завершения (заглушка)
+            logger.info(f"Аналитика: завершение обработки файла")
             
             logger.info(f"Файл {file_path} успешно обработан")
             return result
@@ -137,18 +124,13 @@ class EnhancedFileProcessor:
             logger.error(f"Ошибка при обработке файла {file_path}: {str(e)}")
             
             # Обновляем статус заказа на ошибку
-            order_crud.update_order(db, order_id, schemas.OrderUpdate(
-                status=schemas.OrderStatus.CANCELLED,
-                metadata={"error": str(e)}
-            ))
+            crud.update_order(db, order_id, {
+                "status": "cancelled",
+                "metadata": {"error": str(e)}
+            })
             
-            # Записываем аналитику ошибки
-            analytics_crud.create_event(db, schemas.AnalyticsCreate(
-                event_type="file_processing_failed",
-                user_id=user_id,
-                order_id=order_id,
-                data={"error": str(e)}
-            ))
+            # Записываем аналитику ошибки (заглушка)
+            logger.error(f"Аналитика: ошибка обработки файла - {str(e)}")
             
             raise
         finally:
@@ -268,9 +250,9 @@ class EnhancedFileProcessor:
                 for page_num, page in enumerate(pdf.pages):
                     # Обновляем прогресс
                     progress = (page_num / total_pages) * 100
-                    order_crud.update_order(db, order_id, schemas.OrderUpdate(
-                        progress_percentage=progress
-                    ))
+                    crud.update_order(db, order_id, {
+                        "progress_percentage": progress
+                    })
                     
                     # Извлекаем текст
                     text = page.extract_text()
@@ -317,7 +299,8 @@ class EnhancedFileProcessor:
             
             # Сохраняем изменения
             if changes:
-                order_change_crud.create_changes_batch(db, changes)
+                for change_data in changes:
+                    crud.create_order_change(db, change_data.dict())
             
             return {
                 'total_rows': len(text_data) + len(table_data),
@@ -387,7 +370,8 @@ class EnhancedFileProcessor:
             
             # Сохраняем изменения
             if changes:
-                order_change_crud.create_changes_batch(db, changes)
+                for change_data in changes:
+                    crud.create_order_change(db, change_data.dict())
             
             return {
                 'total_rows': len(text_data) + len(table_data),
@@ -565,7 +549,8 @@ class EnhancedFileProcessor:
             
             # Сохраняем изменения
             if changes:
-                order_change_crud.create_changes_batch(db, changes)
+                for change_data in changes:
+                    crud.create_order_change(db, change_data.dict())
             
             return {
                 'total_rows': len(lines),
@@ -624,30 +609,25 @@ class EnhancedFileProcessor:
             changes = []
             
             # Обрабатываем каждую строку
-            for row_idx, row in df.iterrows():
+            for idx, (row_idx, row) in enumerate(df.iterrows()):
                 # Обновляем прогресс
-                if row_idx % 100 == 0:  # Обновляем каждые 100 строк
-                    progress = (row_idx / total_rows) * 100
-                    order_crud.update_order(db, order_id, schemas.OrderUpdate(
-                        progress_percentage=progress
-                    ))
+                if idx % 100 == 0:  # Обновляем каждые 100 строк
+                    progress = (idx / total_rows) * 100
+                    crud.update_order(db, order_id, {
+                        "progress_percentage": progress
+                    })
                 
                 # Создаем изменения для каждой колонки
                 for col_name, value in row.items():
                     if pd.notna(value):  # Пропускаем NaN значения
-                        changes.append(schemas.OrderChangeCreate(
-                            order_id=order_id,
-                            row_number=row_idx + 1,
-                            column_name=str(col_name),
-                            new_value=str(value),
-                            change_type=schemas.ChangeType.NEW
-                        ))
-            
-            # Сохраняем изменения батчами
-            batch_size = 1000
-            for i in range(0, len(changes), batch_size):
-                batch = changes[i:i + batch_size]
-                order_change_crud.create_changes_batch(db, batch)
+                        change_data = {
+                            "order_id": order_id,
+                            "row_number": idx + 1,
+                            "column_name": str(col_name),
+                            "new_value": str(value),
+                            "change_type": "new"
+                        }
+                        crud.create_order_change(db, change_data)
             
             return {
                 'total_rows': total_rows,
@@ -715,6 +695,151 @@ class EnhancedFileProcessor:
         
         parse_element(element)
         return result
+    
+    async def save_to_storage(self, filename: str, content: bytes) -> str:
+        """Сохраняет файл в облачное хранилище"""
+        try:
+            # Генерируем уникальное имя файла
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            unique_filename = f"{timestamp}_{filename}"
+            
+            # В реальном приложении здесь будет загрузка в DigitalOcean Spaces
+            # Пока сохраняем локально
+            storage_dir = os.path.join(os.getcwd(), 'backend', 'uploads')
+            os.makedirs(storage_dir, exist_ok=True)
+            
+            storage_path = os.path.join(storage_dir, unique_filename)
+            
+            with open(storage_path, 'wb') as f:
+                f.write(content)
+            
+            # Возвращаем относительный путь
+            return f"uploads/{unique_filename}"
+            
+        except Exception as e:
+            logger.error(f"Ошибка сохранения файла в хранилище: {str(e)}")
+            raise
+    
+    def validate_file(self, content: bytes, filename: str) -> Dict[str, Any]:
+        """Валидирует файл"""
+        try:
+            # Определяем расширение файла
+            extension = Path(filename).suffix.lower().lstrip('.')
+            
+            # Проверяем поддерживаемые форматы
+            if extension not in self.SUPPORTED_FORMATS:
+                return {
+                    'valid': False,
+                    'errors': [f'Неподдерживаемый формат файла: {extension}'],
+                    'file_type': extension
+                }
+            
+            # Проверяем размер файла (максимум 100MB)
+            if len(content) > 100 * 1024 * 1024:
+                return {
+                    'valid': False,
+                    'errors': ['Файл слишком большой (максимум 100MB)'],
+                    'file_type': extension
+                }
+            
+            # Проверяем, что файл не пустой
+            if len(content) == 0:
+                return {
+                    'valid': False,
+                    'errors': ['Файл пустой'],
+                    'file_type': extension
+                }
+            
+            # Дополнительные проверки для конкретных форматов
+            validation_errors = []
+            
+            if extension in ['csv', 'tsv']:
+                # Проверяем CSV/TSV файлы
+                try:
+                    # Пробуем прочитать как текст
+                    text_content = content.decode('utf-8')
+                    if not text_content.strip():
+                        validation_errors.append('CSV/TSV файл не содержит данных')
+                except UnicodeDecodeError:
+                    try:
+                        # Пробуем другие кодировки
+                        content.decode('cp1251')
+                    except UnicodeDecodeError:
+                        validation_errors.append('Не удалось определить кодировку файла')
+            
+            elif extension == 'json':
+                # Проверяем JSON файлы
+                try:
+                    json.loads(content.decode('utf-8'))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    validation_errors.append('Некорректный JSON формат')
+            
+            elif extension == 'xml':
+                # Проверяем XML файлы
+                try:
+                    ET.fromstring(content)
+                except ET.ParseError:
+                    validation_errors.append('Некорректный XML формат')
+            
+            elif extension in ['xlsx', 'xls']:
+                # Проверяем Excel файлы
+                try:
+                    # Создаем временный файл для проверки
+                    temp_file = os.path.join(self.temp_dir, f"temp_{filename}")
+                    with open(temp_file, 'wb') as f:
+                        f.write(content)
+                    
+                    if extension == 'xlsx' and openpyxl:
+                        pd.read_excel(temp_file, engine='openpyxl')
+                    elif extension == 'xls':
+                        pd.read_excel(temp_file, engine='xlrd')
+                    
+                    # Удаляем временный файл
+                    os.remove(temp_file)
+                    
+                except Exception:
+                    validation_errors.append(f'Некорректный {extension.upper()} файл')
+            
+            elif extension == 'pdf':
+                # Проверяем PDF файлы
+                if not content.startswith(b'%PDF'):
+                    validation_errors.append('Некорректный PDF файл')
+            
+            elif extension in ['zip', 'rar']:
+                # Проверяем архивы
+                try:
+                    temp_file = os.path.join(self.temp_dir, f"temp_{filename}")
+                    with open(temp_file, 'wb') as f:
+                        f.write(content)
+                    
+                    if extension == 'zip':
+                        with zipfile.ZipFile(temp_file, 'r') as zip_ref:
+                            zip_ref.testzip()
+                    elif extension == 'rar':
+                        with rarfile.RarFile(temp_file, 'r') as rar_ref:
+                            rar_ref.testrar()
+                    
+                    os.remove(temp_file)
+                    
+                except Exception:
+                    validation_errors.append(f'Поврежденный {extension.upper()} архив')
+            
+            # Возвращаем результат валидации
+            return {
+                'valid': len(validation_errors) == 0,
+                'errors': validation_errors,
+                'file_type': extension,
+                'file_size': len(content),
+                'mime_type': self.SUPPORTED_FORMATS.get(extension, 'application/octet-stream')
+            }
+            
+        except Exception as e:
+            logger.error(f"Ошибка валидации файла: {str(e)}")
+            return {
+                'valid': False,
+                'errors': [f'Ошибка валидации: {str(e)}'],
+                'file_type': extension if 'extension' in locals() else 'unknown'
+            }
 
 # Глобальный экземпляр процессора
 file_processor = EnhancedFileProcessor()

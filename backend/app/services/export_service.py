@@ -14,8 +14,10 @@ try:
     import openpyxl
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
 except ImportError:
     openpyxl = None
+    get_column_letter = None
 
 try:
     import xlwt
@@ -35,8 +37,7 @@ except ImportError:
 
 from sqlalchemy.orm import Session
 from ..database import SessionLocal
-from ..crud import order_crud, order_change_crud, user_crud
-from .. import schemas
+from .. import crud, schemas
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -59,23 +60,27 @@ class ExportService:
         db = self.get_db()
         try:
             # Проверяем права доступа к заказу
-            order = order_crud.get_order(db, export_request.order_id)
-            if not order:
-                raise ValueError("Заказ не найден")
+            if export_request.order_id:
+                order = crud.get_order(db, export_request.order_id)
+                if not order:
+                    raise ValueError("Заказ не найден")
+            else:
+                order = None
             
-            if order.user_id != user_id:
-                user = user_crud.get_user(db, user_id)
-                if not user or not user.is_admin:
+            if order and hasattr(order, 'user_id') and order.user_id != user_id:
+                user = crud.get_user_by_id(db, user_id)
+                if not user or not getattr(user, 'is_admin', False):
                     raise ValueError("Нет прав доступа к этому заказу")
             
             # Получаем данные для экспорта
             export_data = await self._prepare_export_data(order, export_request, db)
             
             # Экспортируем в указанном формате
+            order_number = getattr(order, 'order_number', 'unknown') if order else 'unknown'
             file_path = await self._export_by_format(
                 export_data, 
                 export_request.export_format, 
-                order.order_number
+                order_number
             )
             
             # Получаем информацию о файле
@@ -118,8 +123,8 @@ class ExportService:
         }
         
         # Получаем изменения если требуется
-        if export_request.include_changes:
-            changes = order_change_crud.get_changes_by_order(db, order.id)
+        if export_request.include_changes and order:
+            changes = crud.get_order_changes(db, order.id)
             
             # Применяем фильтры если есть
             if export_request.filters:
@@ -258,7 +263,8 @@ class ExportService:
         
         # Лист с информацией о заказе
         ws_info = wb.active
-        ws_info.title = "Order Info"
+        if ws_info is not None:
+            ws_info.title = "Order Info"
         
         # Заголовки и стили
         header_font = Font(bold=True, color="FFFFFF")
@@ -280,10 +286,11 @@ class ExportService:
         
         for row_idx, row_data in enumerate(info_data, 1):
             for col_idx, value in enumerate(row_data, 1):
-                cell = ws_info.cell(row=row_idx, column=col_idx, value=value)
-                if row_idx == 1:  # Заголовок
-                    cell.font = header_font
-                    cell.fill = header_fill
+                if ws_info is not None:
+                    cell = ws_info.cell(row=row_idx, column=col_idx, value=value)
+                    if cell is not None and row_idx == 1:  # Заголовок
+                        cell.font = header_font
+                        cell.fill = header_fill
         
         # Лист с изменениями
         if data['changes']:
@@ -329,17 +336,16 @@ class ExportService:
         
         # Автоподбор ширины колонок
         for ws in wb.worksheets:
-            for column in ws.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                for cell in column:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                adjusted_width = min(max_length + 2, 50)
-                ws.column_dimensions[column_letter].width = adjusted_width
+            if ws is not None:
+                try:
+                    # Устанавливаем фиксированную ширину для всех колонок
+                    for col_num in range(1, 10):  # Первые 10 колонок
+                        if get_column_letter:
+                            column_letter = get_column_letter(col_num)
+                            ws.column_dimensions[column_letter].width = 20
+                except:
+                    # Если автоподбор не работает, пропускаем
+                    pass
         
         # Сохраняем файл
         wb.save(file_path)
@@ -556,6 +562,105 @@ class ExportService:
         doc.build(story)
         
         return file_path
+
+    async def export_analytics_report(self, db: Session, filters: schemas.OrderFilters, format_type: str) -> bytes:
+        """Экспорт аналитического отчета"""
+        try:
+            # Получаем аналитические данные
+            from ..crud import get_analytics_data
+            analytics_data = get_analytics_data(db, filters.date_from, filters.date_to, "day")
+            
+            # Экспортируем в указанном формате
+            if format_type == 'csv':
+                return await self._export_analytics_to_csv(analytics_data)
+            elif format_type == 'xlsx':
+                return await self._export_analytics_to_xlsx(analytics_data)
+            else:
+                raise ValueError(f"Неподдерживаемый формат: {format_type}")
+                
+        except Exception as e:
+            logger.error(f"Ошибка экспорта аналитики: {str(e)}")
+            raise
+    
+    async def _export_analytics_to_csv(self, analytics_data: Dict[str, Any]) -> bytes:
+        """Экспорт аналитики в CSV"""
+        import io
+        
+        output = io.StringIO()
+        
+        # Записываем сводку
+        output.write("Сводка\n")
+        output.write(f"Всего заказов,{analytics_data['summary']['total_orders']}\n")
+        output.write(f"Общая выручка,{analytics_data['summary']['total_revenue']}\n")
+        output.write(f"Средний чек,{analytics_data['summary']['avg_order_value']}\n")
+        output.write("\n")
+        
+        # Записываем данные по типам оплаты
+        output.write("Типы оплаты\n")
+        output.write("Тип,Количество,Сумма\n")
+        for payment in analytics_data['payment_types']:
+            output.write(f"{payment['type']},{payment['count']},{payment['total']}\n")
+        output.write("\n")
+        
+        # Записываем топ автоматы
+        output.write("Топ автоматы\n")
+        output.write("Код автомата,Количество,Сумма\n")
+        for machine in analytics_data['top_machines']:
+            output.write(f"{machine['machine_code']},{machine['count']},{machine['total']}\n")
+        
+        return output.getvalue().encode('utf-8')
+    
+    async def _export_analytics_to_xlsx(self, analytics_data: Dict[str, Any]) -> bytes:
+        """Экспорт аналитики в XLSX"""
+        if not openpyxl:
+            raise ImportError("openpyxl не установлен")
+        
+        import io
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        
+        # Заголовки и стили
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        
+        # Сводка
+        if ws is not None:
+            ws.title = "Analytics"
+            summary_cell = ws.cell(row=1, column=1, value="Сводка")
+            if summary_cell is not None:
+                summary_cell.font = header_font
+                summary_cell.fill = header_fill
+            
+            cell = ws.cell(row=2, column=1, value="Всего заказов")
+            cell = ws.cell(row=2, column=2, value=analytics_data['summary']['total_orders'])
+            cell = ws.cell(row=3, column=1, value="Общая выручка")
+            cell = ws.cell(row=3, column=2, value=analytics_data['summary']['total_revenue'])
+            cell = ws.cell(row=4, column=1, value="Средний чек")
+            cell = ws.cell(row=4, column=2, value=analytics_data['summary']['avg_order_value'])
+            
+            # Типы оплаты
+            start_row = 6
+            payment_header_cell = ws.cell(row=start_row, column=1, value="Типы оплаты")
+            if payment_header_cell is not None:
+                payment_header_cell.font = header_font
+                payment_header_cell.fill = header_fill
+            
+            cell = ws.cell(row=start_row + 1, column=1, value="Тип")
+            cell = ws.cell(row=start_row + 1, column=2, value="Количество")
+            cell = ws.cell(row=start_row + 1, column=3, value="Сумма")
+            
+            for i, payment in enumerate(analytics_data['payment_types']):
+                row = start_row + 2 + i
+                cell = ws.cell(row=row, column=1, value=payment['type'])
+                cell = ws.cell(row=row, column=2, value=payment['count'])
+                cell = ws.cell(row=row, column=3, value=payment['total'])
+        
+        # Сохраняем в байты
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output.getvalue()
 
 # Глобальный экземпляр сервиса экспорта
 export_service = ExportService()

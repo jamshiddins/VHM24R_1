@@ -196,10 +196,12 @@ class FileProcessingProgress(BaseModel):
 
 # Схемы для экспорта
 class ExportRequest(BaseModel):
+    order_id: Optional[int] = None
     data_type: str = Field(..., pattern="^(orders|analytics)$")
-    format: str = Field(..., pattern="^(csv|xlsx|xls|json|pdf)$")
+    export_format: str = Field(..., pattern="^(csv|xlsx|xls|json|pdf)$")
     filename: Optional[str] = None
     filters: Optional[Dict[str, Any]] = None
+    include_changes: bool = True
 
 class ExportRecordCreate(BaseModel):
     user_id: int
@@ -224,8 +226,8 @@ class OrderFilters(BaseModel):
     date_to: Optional[str] = None
     change_type: Optional[str] = None
 
-# Схемы для загруженных файлов (исправленные)
-class UploadedFileCreate(BaseModel):
+# Схемы для загруженных файлов (расширенные)
+class UploadedFileCreateExtended(BaseModel):
     filename: str
     original_name: str
     content_hash: str
