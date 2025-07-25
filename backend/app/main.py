@@ -104,17 +104,62 @@ async def root():
     return {"message": "VHM24R API is running", "version": "1.0.0"}
 
 @app.get("/health")
-async def health_check():
+async def health_check(db: Session = Depends(get_db)):
     """Проверка состояния системы"""
+    services = {}
+    overall_status = "healthy"
+    
+    # Проверка базы данных PostgreSQL
+    try:
+        # Простой запрос для проверки подключения
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+        services["database"] = "connected"
+    except Exception as e:
+        services["database"] = f"error: {str(e)}"
+        overall_status = "unhealthy"
+    
+    # Проверка Redis
+    try:
+        import redis
+        redis_url = os.getenv("REDIS_URL")
+        if redis_url:
+            r = redis.from_url(redis_url)
+            r.ping()
+            services["redis"] = "connected"
+        else:
+            services["redis"] = "not configured"
+    except Exception as e:
+        services["redis"] = f"error: {str(e)}"
+        overall_status = "unhealthy"
+    
+    # Проверка файлового хранилища
+    try:
+        # Проверяем наличие переменных DigitalOcean Spaces
+        do_key = os.getenv("DO_SPACES_KEY")
+        do_secret = os.getenv("DO_SPACES_SECRET")
+        if do_key and do_secret:
+            services["file_storage"] = "configured"
+        else:
+            services["file_storage"] = "not configured"
+    except Exception as e:
+        services["file_storage"] = f"error: {str(e)}"
+    
+    # Проверка Telegram бота
+    try:
+        telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        if telegram_token:
+            services["telegram_bot"] = "configured"
+        else:
+            services["telegram_bot"] = "not configured"
+    except Exception as e:
+        services["telegram_bot"] = f"error: {str(e)}"
+    
     return {
-        "status": "healthy",
+        "status": overall_status,
         "timestamp": datetime.utcnow().isoformat(),
         "version": "1.0.0",
-        "services": {
-            "database": "connected",
-            "file_storage": "available",
-            "telegram_bot": "running"
-        }
+        "services": services
     }
 
 # === АУТЕНТИФИКАЦИЯ ===
