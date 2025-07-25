@@ -25,3 +25,8 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def init_db():
+    """Инициализация базы данных"""
+    from . import models
+    models.Base.metadata.create_all(bind=engine)
