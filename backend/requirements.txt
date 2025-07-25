@@ -1,0 +1,162 @@
+# FastAPI и основные зависимости
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+python-dotenv==1.0.0
+
+# База данных
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+alembic==1.12.1
+
+# Аутентификация и безопасность
+pyjwt==2.8.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+cryptography==41.0.7
+
+# Telegram Bot
+python-telegram-bot==20.7
+telegram==0.0.1
+
+# Обработка файлов
+pandas==2.1.3
+numpy==1.25.2
+openpyxl==3.1.2
+xlrd==2.0.1
+xlwt==1.3.0
+
+# PDF обработка
+PyPDF2==3.0.1
+pdfplumber==0.10.3
+reportlab==4.0.7
+
+# Word документы
+python-docx==1.1.0
+
+# Архивы
+rarfile==4.1
+
+# HTTP клиент
+httpx==0.25.2
+aiohttp==3.9.1
+
+# Валидация данных
+pydantic==2.5.0
+email-validator==2.1.0
+
+# WebSocket поддержка
+websockets==12.0
+
+# Работа с изображениями (для PDF)
+Pillow==10.1.0
+
+# Логирование
+structlog==23.2.0
+
+# Кэширование
+redis==5.0.1
+aioredis==2.0.1
+
+# Мониторинг и метрики
+prometheus-client==0.19.0
+
+# Тестирование
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# Форматирование кода
+black==23.11.0
+isort==5.12.0
+
+# Линтинг
+flake8==6.1.0
+mypy==1.7.1
+
+# Переменные окружения для разработки
+python-decouple==3.8
+
+# Работа с датами
+python-dateutil==2.8.2
+
+# JSON обработка
+orjson==3.9.10
+
+# Асинхронные задачи
+celery==5.3.4
+redis==5.0.1
+
+# Файловое хранилище (DigitalOcean Spaces)
+boto3==1.34.0
+botocore==1.34.0
+
+# Дополнительные утилиты
+click==8.1.7
+rich==13.7.0
+typer==0.9.0
+
+# Работа с XML
+lxml==4.9.3
+
+# Работа с CSV
+chardet==5.2.0
+
+# Сжатие
+gzip==1.0
+
+# Работа с временными зонами
+pytz==2023.3
+
+# Валидация URL
+validators==0.22.0
+
+# Генерация UUID
+uuid==1.30
+
+# Работа с путями
+pathlib2==2.3.7
+
+# Асинхронные операции
+asyncio==3.4.3
+aiofiles==23.2.1
+
+# Сериализация
+pickle-mixin==1.0.2
+
+# Работа с конфигурацией
+pyyaml==6.0.1
+toml==0.10.2
+
+# Дополнительные типы для mypy
+types-python-dateutil==2.8.19.14
+types-redis==4.6.0.11
+types-requests==2.31.0.10
+
+# Производительность
+cython==3.0.6
+
+# Мониторинг производительности
+psutil==5.9.6
+
+# Работа с сетью
+netifaces==0.11.0
+
+# Дополнительные кодеки
+chardet==5.2.0
+charset-normalizer==3.3.2
+
+# Работа с мультимедиа
+python-magic==0.4.27
+
+# Дополнительные утилиты для разработки
+ipython==8.17.2
+jupyter==1.0.0
+
+# Профилирование
+line-profiler==4.1.1
+memory-profiler==0.61.0
+
+# Документация API
+sphinx==7.2.6
+sphinx-rtd-theme==1.3.0

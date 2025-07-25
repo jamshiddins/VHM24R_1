@@ -1,0 +1,24 @@
+{
+  "name": "vhm24r-frontend",
+  "version": "1.0.0",
+  "description": "VHM24R Order Management System Frontend",
+  "main": "index.html",
+  "scripts": {
+    "dev": "python -m http.server 3000",
+    "build": "echo 'Static HTML build complete'",
+    "start": "python -m http.server 8080"
+  },
+  "keywords": [
+    "vhm24r",
+    "order-management",
+    "telegram",
+    "file-processing"
+  ],
+  "author": "VHM24R Team",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
