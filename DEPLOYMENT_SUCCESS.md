@@ -58,14 +58,30 @@
 
 ### API Endpoints
 - ✅ `GET /` - Основная страница API
-- ✅ `GET /health` - Health check
+- ✅ `GET /health` - Health check с реальной проверкой подключений
 - ✅ `GET /docs` - Swagger UI документация
 - ✅ `POST /webhook/telegram` - Telegram webhook
 
-### Сервисы
-- ✅ Database: connected
-- ✅ File Storage: available  
-- ✅ Telegram Bot: running
+### Сервисы (проверено реальными подключениями)
+- ✅ **PostgreSQL Database**: connected (реальная проверка через SQL запрос)
+- ✅ **Redis Cache**: connected (проверка ping)
+- ✅ **DigitalOcean Spaces**: configured (проверка переменных)
+- ✅ **Telegram Bot**: configured (проверка токена)
+
+### Детальная проверка баз данных
+```json
+{
+    "status": "healthy",
+    "timestamp": "2025-07-25T15:12:34.416797",
+    "version": "1.0.0",
+    "services": {
+        "database": "connected",
+        "redis": "connected", 
+        "file_storage": "configured",
+        "telegram_bot": "configured"
+    }
+}
+```
 
 ## 🚀 Следующие шаги
 
