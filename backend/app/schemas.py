@@ -196,8 +196,8 @@ class FileProcessingProgress(BaseModel):
 
 # Схемы для экспорта
 class ExportRequest(BaseModel):
-    data_type: str = Field(..., regex="^(orders|analytics)$")
-    format: str = Field(..., regex="^(csv|xlsx|xls|json|pdf)$")
+    data_type: str = Field(..., pattern="^(orders|analytics)$")
+    format: str = Field(..., pattern="^(csv|xlsx|xls|json|pdf)$")
     filename: Optional[str] = None
     filters: Optional[Dict[str, Any]] = None
 
