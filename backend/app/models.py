@@ -41,7 +41,7 @@ class Order(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
     
     # Метаданные файла
-    metadata = Column(JSON, nullable=True)
+    file_metadata = Column(JSON, nullable=True)
     
     # Связи
     user = relationship("User", back_populates="orders")
