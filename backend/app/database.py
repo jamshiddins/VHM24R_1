@@ -7,10 +7,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Получаем URL базы данных из переменных окружения
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/vhm24r")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Если DATABASE_URL не задан или это PostgreSQL без сервера, используем SQLite
+if not DATABASE_URL or "postgresql://user:password@localhost" in DATABASE_URL:
+    DATABASE_URL = "sqlite:///./vhm24r.db"
+    print(f"🗄️ Используется SQLite: {DATABASE_URL}")
+else:
+    print(f"🗄️ Используется база данных: {DATABASE_URL}")
 
 # Создаем движок базы данных
-engine = create_engine(DATABASE_URL)
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(DATABASE_URL)
 
 # Создаем фабрику сессий
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
