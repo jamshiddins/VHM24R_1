@@ -87,7 +87,7 @@ npm install -g @railway/cli
 
 # Подключение к проекту
 railway login
-railway link 357d2ca5-5933-41fd-b856-3cbeb06a26d2
+railway link 1daf7bb3-ad76-4a0c-9376-fc9b076aa6e7
 
 # Просмотр логов
 railway logs

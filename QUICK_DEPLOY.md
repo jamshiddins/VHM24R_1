@@ -52,7 +52,7 @@ git push -u origin main
 
 ### Шаг 2: Подключение к Railway проекту
 
-У вас уже есть Railway проект: `357d2ca5-5933-41fd-b856-3cbeb06a26d2`
+У вас уже есть Railway проект: `1daf7bb3-ad76-4a0c-9376-fc9b076aa6e7`
 
 1. Войдите на [railway.app](https://railway.app)
 2. Откройте ваш проект или создайте новый сервис
