@@ -39,6 +39,7 @@ rarfile==4.1
 # HTTP клиент
 httpx~=0.25.2
 aiohttp==3.9.1
+requests==2.31.0
 
 # Валидация данных
 pydantic>=2.7.4

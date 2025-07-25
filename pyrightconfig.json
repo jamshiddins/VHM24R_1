@@ -8,8 +8,7 @@
         "frontend"
     ],
     "extraPaths": [
-        "backend",
-        "backend/app"
+        "backend"
     ],
     "pythonVersion": "3.11",
     "pythonPlatform": "Windows",
@@ -18,5 +17,11 @@
     "useLibraryCodeForTypes": true,
     "autoSearchPaths": true,
     "reportMissingImports": "error",
-    "reportMissingTypeStubs": false
+    "reportMissingTypeStubs": false,
+    "executionEnvironments": [
+        {
+            "root": "backend",
+            "pythonVersion": "3.11"
+        }
+    ]
 }
