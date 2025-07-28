@@ -1,0 +1,50 @@
+server.name: "vhm24r-kibana"
+server.host: "0.0.0.0"
+server.port: 5601
+
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+elasticsearch.username: ""
+elasticsearch.password: ""
+
+# Kibana settings
+kibana.index: ".kibana"
+kibana.defaultAppId: "dashboard"
+
+# Logging
+logging.appenders:
+  file:
+    type: file
+    fileName: /var/log/kibana/kibana.log
+    layout:
+      type: json
+logging.root:
+  appenders:
+    - default
+    - file
+  level: info
+
+# Security
+server.ssl.enabled: false
+elasticsearch.ssl.verificationMode: none
+
+# Performance
+elasticsearch.requestTimeout: 30000
+elasticsearch.shardTimeout: 30000
+
+# Monitoring
+monitoring.ui.container.elasticsearch.enabled: true
+monitoring.ui.container.logstash.enabled: true
+
+# Advanced settings
+map.includeElasticMapsService: false
+telemetry.enabled: false
+newsfeed.enabled: false
+
+# Custom branding
+server.customResponseHeaders:
+  "X-Frame-Options": "SAMEORIGIN"
+  "X-Content-Type-Options": "nosniff"
+  "X-XSS-Protection": "1; mode=block"
+
+# Dashboard settings
+dashboard.defaultDarkMode: false

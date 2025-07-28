@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VHM24R - Система управления заказами</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        .loading { display: flex; justify-content: center; align-items: center; height: 50vh; }
+        .hidden { display: none !important; }
+        .error { background-color: #fee2e2; color: #dc2626; padding: 1rem; border-radius: 0.5rem; margin: 1rem 0; }
+        .success { background-color: #dcfce7; color: #16a34a; padding: 1rem; border-radius: 0.5rem; margin: 1rem 0; }
+        .progress-bar { transition: width 0.3s ease; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .btn { padding: 0.5rem 1rem; border-radius: 0.5rem; font-weight: 500; cursor: pointer; border: none; }
+        .btn-primary { background-color: #3b82f6; color: white; }
+        .btn-primary:hover { background-color: #2563eb; }
+        .btn-success { background-color: #10b981; color: white; }
+        .btn-success:hover { background-color: #059669; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div id="app" class="container mx-auto px-4 py-6 max-w-4xl">
+        <!-- Header -->
+        <header class="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-800">VHM24R</h1>
+                    <p class="text-gray-600">Система управления заказами</p>
+                </div>
+                <div id="user-info" class="hidden">
+                    <div class="text-right">
+                        <p class="font-semibold" id="user-name"></p>
+                        <p class="text-sm text-gray-500" id="user-status"></p>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Auth Section -->
+        <div id="auth-section" class="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">🔐 Авторизация</h2>
+            <div id="auth-status" class="mb-4">
+                <p class="text-gray-600">Для работы с системой необходимо авторизоваться через Telegram</p>
+            </div>
+            <button id="telegram-login" class="btn btn-primary">
+                Войти через Telegram
+            </button>
+        </div>
+
+        <!-- Main Content -->
+        <div id="main-content" class="hidden">
+            <!-- Navigation Tabs -->
+            <div class="bg-white rounded-lg shadow-sm mb-6">
+                <nav class="flex space-x-1 p-2">
+                    <button class="tab-btn px-4 py-2 rounded-md text-sm font-medium bg-blue-100 text-blue-700" data-tab="dashboard">
+                        📊 Дашборд
+                    </button>
+                    <button class="tab-btn px-4 py-2 rounded-md text-sm font-medium text-gray-500 hover:text-gray-700" data-tab="upload">
+                        📤 Загрузка
+                    </button>
+                    <button class="tab-btn px-4 py-2 rounded-md text-sm font-medium text-gray-500 hover:text-gray-700" data-tab="orders">
+                        📋 Заказы
+                    </button>
+                    <button class="tab-btn px-4 py-2 rounded-md text-sm font-medium text-gray-500 hover:text-gray-700" data-tab="analytics">
+                        📈 Аналитика
+                    </button>
+                </nav>
+            </div>
+
+            <!-- Dashboard Tab -->
+            <div id="tab-dashboard" class="tab-content active">
+                <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                    <div class="bg-white p-4 rounded-lg shadow-sm">
+                        <div class="flex items-center">
+                            <div class="p-2 bg-blue-100 rounded-lg">
+                                <span class="text-2xl">📁</span>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm text-gray-500">Всего файлов</p>
+                                <p class="text-lg font-semibold" id="total-files">0</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow-sm">
+                        <div class="flex items-center">
+                            <div class="p-2 bg-green-100 rounded-lg">
+                                <span class="text-2xl">📋</span>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm text-gray-500">Заказов</p>
+                                <p class="text-lg font-semibold" id="total-orders">0</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow-sm">
+                        <div class="flex items-center">
+                            <div class="p-2 bg-yellow-100 rounded-lg">
+                                <span class="text-2xl">⏳</span>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm text-gray-500">Обработка</p>
+                                <p class="text-lg font-semibold" id="processing-files">0</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg shadow-sm">
+                        <div class="flex items-center">
+                            <div class="p-2 bg-purple-100 rounded-lg">
+                                <span class="text-2xl">👥</span>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm text-gray-500">Пользователи</p>
+                                <p class="text-lg font-semibold" id="total-users">0</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Upload Tab -->
+            <div id="tab-upload" class="tab-content">
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <h3 class="text-lg font-semibold mb-4">📤 Загрузка файлов</h3>
+                    
+                    <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center" id="drop-zone">
+                        <input type="file" id="file-input" multiple accept=".csv,.xls,.xlsx,.pdf,.doc,.docx,.json,.xml,.zip,.rar,.txt,.tsv" class="hidden">
+                        <div class="cursor-pointer">
+                            <svg class="mx-auto h-12 w-12 text-gray-400 mb-4" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                                <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                            <p class="text-lg text-gray-600 mb-2">Перетащите файлы сюда или нажмите для выбора</p>
+                            <p class="text-sm text-gray-500">Поддерживаемые форматы: CSV, XLS, XLSX, PDF, DOC, DOCX, JSON, XML, ZIP, RAR, TXT, TSV (до 100MB)</p>
+                        </div>
+                    </div>
+                    
+                    <div id="upload-progress" class="hidden mt-4">
+                        <div class="bg-gray-200 rounded-full h-2">
+                            <div id="progress-bar" class="bg-blue-600 h-2 rounded-full progress-bar" style="width: 0%"></div>
+                        </div>
+                        <p id="progress-text" class="text-sm text-gray-600 mt-2">Загрузка...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Orders Tab -->
+            <div id="tab-orders" class="tab-content">
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <h3 class="text-lg font-semibold mb-4">📋 Заказы</h3>
+                    <div class="mb-4 flex space-x-4">
+                        <input type="text" id="search-order" placeholder="Поиск по номеру заказа" class="border rounded-lg px-3 py-2 flex-1">
+                        <button id="search-btn" class="btn btn-primary">Поиск</button>
+                        <button id="export-btn" class="btn btn-success">Экспорт</button>
+                    </div>
+                    <div id="orders-list" class="space-y-2">
+                        <p class="text-gray-500">Заказы не найдены</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analytics Tab -->
+            <div id="tab-analytics" class="tab-content">
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <h3 class="text-lg font-semibold mb-4">📈 Аналитика</h3>
+                    <div id="analytics-content">
+                        <p class="text-gray-500">Загрузка аналитики...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Messages -->
+        <div id="messages"></div>
+    </div>
+
+    <script>
+        // Конфигурация
+        const API_BASE = '/api/v1';
+        let authToken = localStorage.getItem('auth_token');
+        let currentUser = null;
+
+        // Telegram WebApp
+        const tg = window.Telegram?.WebApp;
+        if (tg) {
+            tg.ready();
+            tg.expand();
+        }
+
+        // Элементы DOM
+        const authSection = document.getElementById('auth-section');
+        const mainContent = document.getElementById('main-content');
+        const userInfo = document.getElementById('user-info');
+        const telegramLoginBtn = document.getElementById('telegram-login');
+        const fileInput = document.getElementById('file-input');
+        const dropZone = document.getElementById('drop-zone');
+        const uploadProgress = document.getElementById('upload-progress');
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const messagesDiv = document.getElementById('messages');
+
+        // Инициализация
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (authToken) {
+                await checkAuth();
+            }
+            setupEventListeners();
+            setupTabs();
+        });
+
+        // Настройка табов
+        function setupTabs() {
+            const tabBtns = document.querySelectorAll('.tab-btn');
+            const tabContents = document.querySelectorAll('.tab-content');
+
+            tabBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tabId = btn.dataset.tab;
+                    
+                    // Деактивировать все табы
+                    tabBtns.forEach(b => {
+                        b.classList.remove('bg-blue-100', 'text-blue-700');
+                        b.classList.add('text-gray-500', 'hover:text-gray-700');
+                    });
+                    tabContents.forEach(content => {
+                        content.classList.remove('active');
+                    });
+                    
+                    // Активировать выбранный таб
+                    btn.classList.add('bg-blue-100', 'text-blue-700');
+                    btn.classList.remove('text-gray-500', 'hover:text-gray-700');
+                    document.getElementById(`tab-${tabId}`).classList.add('active');
+                    
+                    // Загрузить данные для таба
+                    loadTabData(tabId);
+                });
+            });
+        }
+
+        // Настройка обработчиков событий
+        function setupEventListeners() {
+            // Telegram login
+            telegramLoginBtn.addEventListener('click', loginWithTelegram);
+
+            // File upload
+            fileInput.addEventListener('change', handleFileSelect);
+            dropZone.addEventListener('click', () => fileInput.click());
+            dropZone.addEventListener('dragover', handleDragOver);
+            dropZone.addEventListener('drop', handleDrop);
+
+            // Search
+            document.getElementById('search-btn').addEventListener('click', searchOrders);
+            document.getElementById('export-btn').addEventListener('click', exportData);
+        }
+
+        // Проверка авторизации
+        async function checkAuth() {
+            try {
+                const response = await fetch(`${API_BASE}/auth/me`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                if (response.ok) {
+                    currentUser = await response.json();
+                    showMainContent();
+                } else {
+                    localStorage.removeItem('auth_token');
+                    authToken = null;
+                }
+            } catch (error) {
+                console.error('Auth check failed:', error);
+                localStorage.removeItem('auth_token');
+                authToken = null;
+            }
+        }
+
+        // Показать основной контент
+        function showMainContent() {
+            authSection.classList.add('hidden');
+            mainContent.classList.remove('hidden');
+            userInfo.classList.remove('hidden');
+            
+            document.getElementById('user-name').textContent = currentUser.username || currentUser.first_name;
+            document.getElementById('user-status').textContent = `Статус: ${currentUser.status}`;
+            
+            loadTabData('dashboard');
+        }
+
+        // Авторизация через Telegram
+        async function loginWithTelegram() {
+            if (tg && tg.initDataUnsafe?.user) {
+                const user = tg.initDataUnsafe.user;
+                const authData = {
+                    id: user.id,
+                    first_name: user.first_name,
+                    last_name: user.last_name,
+                    username: user.username,
+                    photo_url: user.photo_url,
+                    auth_date: Math.floor(Date.now() / 1000),
+                    hash: tg.initData
+                };
+
+                try {
+                    const response = await fetch(`${API_BASE}/auth/telegram`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(authData)
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        authToken = data.access_token;
+                        localStorage.setItem('auth_token', authToken);
+                        currentUser = data.user;
+                        showMainContent();
+                        showMessage('Успешная авторизация!', 'success');
+                    } else {
+                        const error = await response.json();
+                        showMessage(error.detail || 'Ошибка авторизации', 'error');
+                    }
+                } catch (error) {
+                    showMessage('Ошибка подключения к серверу', 'error');
+                }
+            } else {
+                showMessage('Доступно только в Telegram WebApp', 'error');
+            }
+        }
+
+        // Загрузка данных для таба
+        async function loadTabData(tabId) {
+            if (!authToken) return;
+
+            try {
+                switch (tabId) {
+                    case 'dashboard':
+                        await loadDashboard();
+                        break;
+                    case 'orders':
+                        await loadOrders();
+                        break;
+                    case 'analytics':
+                        await loadAnalytics();
+                        break;
+                }
+            } catch (error) {
+                console.error(`Error loading ${tabId}:`, error);
+            }
+        }
+
+        // Загрузка дашборда
+        async function loadDashboard() {
+            try {
+                const response = await fetch(`${API_BASE}/analytics`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('total-files').textContent = data.total_files || 0;
+                    document.getElementById('total-orders').textContent = data.total_orders || 0;
+                    document.getElementById('processing-files').textContent = data.processing_files || 0;
+                    document.getElementById('total-users').textContent = data.total_users || 0;
+                }
+            } catch (error) {
+                console.error('Error loading dashboard:', error);
+            }
+        }
+
+        // Загрузка заказов
+        async function loadOrders() {
+            try {
+                const response = await fetch(`${API_BASE}/orders`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                if (response.ok) {
+                    const orders = await response.json();
+                    displayOrders(orders);
+                }
+            } catch (error) {
+                console.error('Error loading orders:', error);
+            }
+        }
+
+        // Отображение заказов
+        function displayOrders(orders) {
+            const ordersList = document.getElementById('orders-list');
+            
+            if (orders.length === 0) {
+                ordersList.innerHTML = '<p class="text-gray-500">Заказы не найдены</p>';
+                return;
+            }
+
+            ordersList.innerHTML = orders.map(order => `
+                <div class="border rounded-lg p-4 hover:bg-gray-50">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <h4 class="font-medium">${order.order_number || 'Без номера'}</h4>
+                            <p class="text-sm text-gray-500">Статус: ${order.status}</p>
+                            <p class="text-sm text-gray-500">Дата: ${new Date(order.created_at).toLocaleString('ru')}</p>
+                        </div>
+                        <div class="text-right">
+                            <span class="inline-block px-2 py-1 text-xs rounded-full ${getStatusColor(order.status)}">
+                                ${order.status}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Цвет статуса
+        function getStatusColor(status) {
+            switch (status) {
+                case 'completed': return 'bg-green-100 text-green-800';
+                case 'processing': return 'bg-yellow-100 text-yellow-800';
+                case 'pending': return 'bg-gray-100 text-gray-800';
+                default: return 'bg-gray-100 text-gray-800';
+            }
+        }
+
+        // Загрузка аналитики
+        async function loadAnalytics() {
+            const analyticsContent = document.getElementById('analytics-content');
+            analyticsContent.innerHTML = '<p class="text-gray-500">Аналитика пока недоступна</p>';
+        }
+
+        // Обработка выбора файлов
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            uploadFiles(files);
+        }
+
+        // Обработка drag & drop
+        function handleDragOver(event) {
+            event.preventDefault();
+            dropZone.classList.add('border-blue-500', 'bg-blue-50');
+        }
+
+        function handleDrop(event) {
+            event.preventDefault();
+            dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+            const files = Array.from(event.dataTransfer.files);
+            uploadFiles(files);
+        }
+
+        // Загрузка файлов
+        async function uploadFiles(files) {
+            if (!authToken) {
+                showMessage('Необходимо авторизоваться', 'error');
+                return;
+            }
+
+            if (files.length === 0) return;
+
+            const formData = new FormData();
+            files.forEach(file => {
+                formData.append('files', file);
+            });
+
+            uploadProgress.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Загрузка файлов...';
+
+            try {
+                const xhr = new XMLHttpRequest();
+                
+                xhr.upload.addEventListener('progress', (event) => {
+                    if (event.lengthComputable) {
+                        const percentComplete = (event.loaded / event.total) * 100;
+                        progressBar.style.width = `${percentComplete}%`;
+                        progressText.textContent = `Загружено: ${Math.round(percentComplete)}%`;
+                    }
+                });
+
+                xhr.addEventListener('load', () => {
+                    uploadProgress.classList.add('hidden');
+                    if (xhr.status === 200) {
+                        const response = JSON.parse(xhr.responseText);
+                        showMessage(`Успешно загружено ${files.length} файлов`, 'success');
+                        loadTabData('dashboard'); // Обновить дашборд
+                    } else {
+                        const error = JSON.parse(xhr.responseText);
+                        showMessage(error.detail || 'Ошибка загрузки', 'error');
+                    }
+                });
+
+                xhr.addEventListener('error', () => {
+                    uploadProgress.classList.add('hidden');
+                    showMessage('Ошибка подключения к серверу', 'error');
+                });
+
+                xhr.open('POST', `${API_BASE}/upload`);
+                xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+                xhr.send(formData);
+
+            } catch (error) {
+                uploadProgress.classList.add('hidden');
+                showMessage('Ошибка загрузки файлов', 'error');
+            }
+        }
+
+        // Поиск заказов
+        async function searchOrders() {
+            const query = document.getElementById('search-order').value.trim();
+            if (!query) {
+                loadOrders();
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/orders?search=${encodeURIComponent(query)}`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                if (response.ok) {
+                    const orders = await response.json();
+                    displayOrders(orders);
+                }
+            } catch (error) {
+                showMessage('Ошибка поиска', 'error');
+            }
+        }
+
+        // Экспорт данных
+        async function exportData() {
+            if (!authToken) {
+                showMessage('Необходимо авторизоваться', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/export`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        format: 'xlsx',
+                        include_changes: true
+                    })
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `vhm24r_export_${new Date().toISOString().split('T')[0]}.xlsx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    showMessage('Данные экспортированы', 'success');
+                } else {
+                    showMessage('Ошибка экспорта', 'error');
+                }
+            } catch (error) {
+                showMessage('Ошибка экспорта данных', 'error');
+            }
+        }
+
+        // Показать сообщение
+        function showMessage(text, type = 'info') {
+            const messageEl = document.createElement('div');
+            messageEl.className = `${type} rounded-lg p-4 mb-4`;
+            messageEl.textContent = text;
+            
+            messagesDiv.appendChild(messageEl);
+            
+            setTimeout(() => {
+                messageEl.remove();
+            }, 5000);
+        }
+    </script>
+</body>
+</html>

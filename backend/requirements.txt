@@ -1,0 +1,115 @@
+# FastAPI и основные зависимости
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+python-dotenv==1.0.0
+jinja2==3.1.2
+
+# База данных
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+alembic==1.12.1
+
+# Аутентификация и безопасность
+pyjwt>=2.10.1,<3.0.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+cryptography==41.0.7
+
+# Telegram Bot
+python-telegram-bot==20.7
+
+# Обработка файлов
+pandas==2.1.3
+numpy>=1.23.2,<2.0.0
+openpyxl==3.1.2
+xlrd==2.0.1
+xlwt==1.3.0
+
+# PDF обработка
+PyPDF2==3.0.1
+pdfplumber==0.10.3
+reportlab==4.0.7
+
+# Word документы
+python-docx==1.1.0
+
+# Архивы
+rarfile==4.1
+
+# HTTP клиент
+httpx~=0.25.2
+aiohttp==3.9.1
+requests==2.31.0
+
+# Валидация данных
+pydantic>=2.7.4
+email-validator==2.1.0
+
+# WebSocket поддержка
+websockets>=13.0.0,<15.1.0
+
+# Работа с изображениями
+Pillow==10.1.0
+
+# Логирование
+structlog==23.2.0
+
+# Кэширование
+redis==5.0.1
+aioredis==2.0.1
+
+# Мониторинг и метрики
+prometheus-client==0.19.0
+
+# Переменные окружения
+python-decouple==3.8
+
+# Работа с датами
+python-dateutil==2.8.2
+
+# JSON обработка
+orjson>=3.9.14,<4.0.0
+
+# Асинхронные задачи
+celery==5.3.4
+
+# Файловое хранилище (DigitalOcean Spaces)
+boto3==1.34.0
+botocore==1.34.0
+
+# Дополнительные утилиты
+click>=8.1.8
+rich==13.7.0
+typer==0.9.0
+
+# Работа с XML
+lxml>=5.3.0
+
+# Работа с CSV
+chardet==5.2.0
+
+# Работа с временными зонами
+pytz==2023.3
+
+# Валидация URL
+validators==0.22.0
+
+# Асинхронные файловые операции
+aiofiles==23.2.1
+anyio>=3.7.1,<4.0.0
+
+# Работа с конфигурацией
+pyyaml==6.0.1
+
+# Производительность
+# psutil==5.9.6  # Отключен для Alpine Linux совместимости
+
+# Работа с мультимедиа
+python-magic==0.4.27
+
+# Настройки Pydantic
+pydantic-settings>=2.10.1
+
+# Rate limiting
+slowapi==0.1.9

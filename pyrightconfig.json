@@ -1,0 +1,27 @@
+{
+    "include": [
+        "backend"
+    ],
+    "exclude": [
+        "**/node_modules",
+        "**/__pycache__",
+        "frontend"
+    ],
+    "extraPaths": [
+        "backend"
+    ],
+    "pythonVersion": "3.11",
+    "pythonPlatform": "Windows",
+    "pythonPath": "C:\\Program Files\\Python311\\python.exe",
+    "typeCheckingMode": "basic",
+    "useLibraryCodeForTypes": true,
+    "autoSearchPaths": true,
+    "reportMissingImports": "error",
+    "reportMissingTypeStubs": false,
+    "executionEnvironments": [
+        {
+            "root": "backend",
+            "pythonVersion": "3.11"
+        }
+    ]
+}
