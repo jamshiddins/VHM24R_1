@@ -15,6 +15,28 @@ from datetime import datetime, timedelta
 import os
 from pathlib import Path
 
+# Sentry для error tracking
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
+# Инициализация Sentry
+sentry_dsn = os.getenv("SENTRY_DSN")
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        integrations=[
+            FastApiIntegration(),
+            SqlalchemyIntegration(),
+        ],
+        traces_sample_rate=0.1,
+        environment=os.getenv("ENVIRONMENT", "production"),
+        release=os.getenv("APP_VERSION", "1.0.1"),
+    )
+    print("✅ Sentry initialized for error tracking")
+else:
+    print("⚠️ SENTRY_DSN not found, error tracking disabled")
+
 from .database import get_db, engine, init_db
 from .models import User, UploadedFile, Order, OrderChange, TelegramSession
 from .schemas import *
