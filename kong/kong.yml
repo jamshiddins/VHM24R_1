@@ -1,0 +1,140 @@
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: vhm24r-backend
+    url: http://backend:8000
+    plugins:
+      - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - POST
+            - PUT
+            - DELETE
+            - OPTIONS
+          headers:
+            - Accept
+            - Accept-Version
+            - Content-Length
+            - Content-MD5
+            - Content-Type
+            - Date
+            - Authorization
+          exposed_headers:
+            - X-Auth-Token
+          credentials: true
+          max_age: 3600
+      - name: rate-limiting
+        config:
+          minute: 100
+          hour: 1000
+          policy: local
+      - name: request-size-limiting
+        config:
+          allowed_payload_size: 100
+      - name: response-transformer
+        config:
+          add:
+            headers:
+              - "X-API-Gateway: Kong"
+              - "X-Service: VHM24R"
+
+  - name: vhm24r-frontend
+    url: http://frontend:80
+    plugins:
+      - name: cors
+        config:
+          origins:
+            - "*"
+          credentials: true
+
+routes:
+  # Backend API routes
+  - name: api-v1
+    service: vhm24r-backend
+    paths:
+      - /api/v1
+    strip_path: false
+    plugins:
+      - name: jwt
+        config:
+          secret_is_base64: false
+          run_on_preflight: false
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - "X-Forwarded-Proto: https"
+              - "X-Real-IP: $(headers.x-forwarded-for)"
+
+  # Health check route (no auth required)
+  - name: health-check
+    service: vhm24r-backend
+    paths:
+      - /health
+    strip_path: false
+
+  # Telegram webhook (no auth required)
+  - name: telegram-webhook
+    service: vhm24r-backend
+    paths:
+      - /webhook/telegram
+    strip_path: false
+
+  # Auth routes (no JWT required)
+  - name: auth-routes
+    service: vhm24r-backend
+    paths:
+      - /api/v1/auth
+    strip_path: false
+
+  # Dynamic auth pages
+  - name: dynamic-auth
+    service: vhm24r-backend
+    paths:
+      - /auth/dynamic
+    strip_path: false
+
+  # WebApp route
+  - name: webapp
+    service: vhm24r-backend
+    paths:
+      - /webapp
+    strip_path: false
+
+  # Frontend routes
+  - name: frontend
+    service: vhm24r-frontend
+    paths:
+      - /
+    strip_path: false
+    plugins:
+      - name: response-transformer
+        config:
+          add:
+            headers:
+              - "X-Frame-Options: DENY"
+              - "X-Content-Type-Options: nosniff"
+              - "X-XSS-Protection: 1; mode=block"
+
+consumers:
+  - username: vhm24r-system
+    custom_id: system-user
+
+plugins:
+  - name: prometheus
+    config:
+      per_consumer: true
+  - name: request-id
+  - name: correlation-id
+
+# Global rate limiting
+- name: rate-limiting
+  config:
+    minute: 1000
+    hour: 10000
+    day: 50000
+    policy: cluster

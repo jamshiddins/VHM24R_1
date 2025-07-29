@@ -1,0 +1,25 @@
+cluster.name: "vhm24r-cluster"
+node.name: "vhm24r-node-1"
+network.host: 0.0.0.0
+http.port: 9200
+discovery.type: single-node
+
+# Security settings
+xpack.security.enabled: false
+xpack.security.enrollment.enabled: false
+
+# Memory settings
+bootstrap.memory_lock: true
+
+# Index settings
+action.auto_create_index: "+logstash-*,+filebeat-*,+vhm24r-*,-*"
+
+# Logging
+logger.org.elasticsearch.deprecation: warn
+
+# Performance settings
+indices.memory.index_buffer_size: 20%
+indices.memory.min_index_buffer_size: 96mb
+
+# Monitoring
+xpack.monitoring.collection.enabled: true

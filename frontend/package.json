@@ -1,0 +1,34 @@
+{
+  "name": "vhm24r-frontend",
+  "version": "1.0.0",
+  "description": "VHM24R Order Management System Frontend",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve-static": "python -m http.server 3000"
+  },
+  "keywords": [
+    "vhm24r",
+    "order-management",
+    "telegram",
+    "file-processing"
+  ],
+  "author": "VHM24R Team",
+  "license": "MIT",
+  "dependencies": {
+    "vue": "^3.4.0",
+    "vue-router": "^4.2.5",
+    "axios": "^1.6.0",
+    "lucide-vue-next": "^0.294.0",
+    "chart.js": "^4.4.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

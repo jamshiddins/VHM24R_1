@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VHM24R - Тест входа</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen flex items-center justify-center bg-gray-50">
+    <div class="max-w-md w-full space-y-8">
+        <div>
+            <div class="mx-auto h-12 w-12 flex items-center justify-center rounded-full bg-blue-100">
+                <span class="text-2xl">🔐</span>
+            </div>
+            <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">
+                VHM24R Order Management
+            </h2>
+            <p class="mt-2 text-center text-sm text-gray-600">
+                Система управления заказами
+            </p>
+        </div>
+
+        <!-- Обычная авторизация -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="text-center mb-6">
+                <div class="mx-auto h-16 w-16 flex items-center justify-center rounded-full bg-green-500 mb-4">
+                    <span class="text-white text-2xl">🔑</span>
+                </div>
+                <h3 class="text-lg font-medium text-gray-900 mb-2">
+                    Вход в систему
+                </h3>
+                <p class="text-sm text-gray-500">
+                    Введите логин и пароль для доступа
+                </p>
+            </div>
+            
+            <form id="loginForm" class="space-y-4">
+                <div>
+                    <label for="username" class="block text-sm font-medium text-gray-700">
+                        Логин
+                    </label>
+                    <input
+                        id="username"
+                        name="username"
+                        type="text"
+                        required
+                        class="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                        placeholder="Введите логин"
+                        value="admin"
+                    />
+                </div>
+                
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700">
+                        Пароль
+                    </label>
+                    <input
+                        id="password"
+                        name="password"
+                        type="password"
+                        required
+                        class="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
+                        placeholder="Введите пароль"
+                        value="admin123"
+                    />
+                </div>
+                
+                <div>
+                    <button
+                        type="submit"
+                        id="loginBtn"
+                        class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Войти
+                    </button>
+                </div>
+                
+                <div id="errorMessage" class="text-red-600 text-sm text-center hidden"></div>
+                <div id="successMessage" class="text-green-600 text-sm text-center hidden"></div>
+            </form>
+            
+            <div class="mt-4 text-center">
+                <p class="text-xs text-gray-500">
+                    Тестовые данные: admin / admin123
+                </p>
+            </div>
+        </div>
+
+        <!-- Ссылка на Vue приложение -->
+        <div class="text-center">
+            <a href="http://localhost:5173" class="text-blue-600 hover:text-blue-800 text-sm">
+                Перейти к Vue приложению
+            </a>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const loginBtn = document.getElementById('loginBtn');
+            const errorMessage = document.getElementById('errorMessage');
+            const successMessage = document.getElementById('successMessage');
+            
+            // Скрываем сообщения
+            errorMessage.classList.add('hidden');
+            successMessage.classList.add('hidden');
+            
+            // Показываем загрузку
+            loginBtn.disabled = true;
+            loginBtn.textContent = 'Вход...';
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/v1/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Успешный вход
+                    localStorage.setItem('token', data.access_token);
+                    localStorage.setItem('user', JSON.stringify(data.user));
+                    
+                    successMessage.textContent = 'Успешный вход! Перенаправление...';
+                    successMessage.classList.remove('hidden');
+                    
+                    // Перенаправляем на Vue приложение
+                    setTimeout(() => {
+                        window.location.href = 'http://localhost:5173';
+                    }, 1000);
+                } else {
+                    // Ошибка входа
+                    errorMessage.textContent = data.detail || 'Неверный логин или пароль';
+                    errorMessage.classList.remove('hidden');
+                }
+            } catch (error) {
+                errorMessage.textContent = 'Ошибка подключения к серверу';
+                errorMessage.classList.remove('hidden');
+            } finally {
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'Войти';
+            }
+        });
+    </script>
+</body>
+</html>

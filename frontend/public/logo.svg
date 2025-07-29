@@ -1,0 +1,22 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="100" cy="100" r="100" fill="#E67E22"/>
+  
+  <!-- Текст "hub" -->
+  <text x="50" y="120" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="white">hub</text>
+  
+  <!-- Иконка компьютера -->
+  <g transform="translate(130, 60)">
+    <!-- Экран -->
+    <rect x="0" y="0" width="50" height="35" rx="5" ry="5" fill="none" stroke="#2C3E50" stroke-width="4"/>
+    <rect x="5" y="5" width="40" height="25" fill="#E67E22"/>
+    
+    <!-- Подставка -->
+    <rect x="20" y="35" width="10" height="15" fill="#2C3E50"/>
+    <rect x="10" y="50" width="30" height="5" rx="2" ry="2" fill="#2C3E50"/>
+    
+    <!-- Детали на экране -->
+    <rect x="8" y="8" width="15" height="2" fill="#E67E22"/>
+    <rect x="8" y="12" width="10" height="2" fill="#E67E22"/>
+    <circle cx="40" cy="25" r="3" fill="#E67E22"/>
+  </g>
+</svg>
