@@ -183,63 +183,96 @@
         // Аутентификация пользователя
         async function authenticateUser(telegramUser) {
             try {
-                // Проверяем сохраненный токен
+                console.log('🔍 Starting authentication process...');
+                
+                // ПРИОРИТЕТ 1: Проверяем URL параметры для автоматической аутентификации
+                const urlParams = new URLSearchParams(window.location.search);
+                const autoToken = urlParams.get('token');
+                
+                if (autoToken) {
+                    console.log('✅ Found token in URL, authenticating...');
+                    authToken = autoToken;
+                    localStorage.setItem('auth_token', autoToken);
+                    
+                    // Очищаем URL от параметров СРАЗУ
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                    
+                    await loadUserData();
+                    if (isAuthenticated) {
+                        console.log('✅ Authentication successful via URL token');
+                        showMainInterface();
+                        return;
+                    } else {
+                        console.log('❌ URL token is invalid');
+                        localStorage.removeItem('auth_token');
+                    }
+                }
+
+                // ПРИОРИТЕТ 2: Проверяем сохраненный токен (только если нет токена в URL)
                 const savedToken = localStorage.getItem('auth_token');
-                if (savedToken) {
+                if (savedToken && savedToken !== autoToken) {
+                    console.log('🔍 Checking saved token...');
                     authToken = savedToken;
                     await loadUserData();
                     if (isAuthenticated) {
+                        console.log('✅ Authentication successful via saved token');
                         showMainInterface();
                         return;
+                    } else {
+                        console.log('❌ Saved token is invalid, removing...');
+                        localStorage.removeItem('auth_token');
                     }
                 }
 
-                // Проверяем URL параметры для автоматической аутентификации
-                const urlParams = new URLSearchParams(window.location.search);
-                const autoToken = urlParams.get('token');
-                if (autoToken) {
-                    authToken = autoToken;
-                    localStorage.setItem('auth_token', autoToken);
-                    await loadUserData();
-                    if (isAuthenticated) {
-                        // Очищаем URL от параметров
-                        window.history.replaceState({}, document.title, window.location.pathname);
-                        showMainInterface();
-                        return;
-                    }
-                }
-
-                // Если нет сохраненного токена, показываем сообщение о входе через бота
+                // ПРИОРИТЕТ 3: Если нет валидного токена, показываем сообщение о входе через бота
+                console.log('❌ No valid token found, showing login message');
                 showTelegramLoginMessage();
                 
             } catch (error) {
-                console.error('Authentication error:', error);
+                console.error('❌ Authentication error:', error);
+                localStorage.removeItem('auth_token');
+                authToken = null;
+                isAuthenticated = false;
                 showTelegramLoginMessage();
             }
         }
 
         // Загрузка данных пользователя
         async function loadUserData() {
+            if (!authToken) {
+                console.log('❌ No auth token available');
+                isAuthenticated = false;
+                return;
+            }
+
             try {
+                console.log('🔍 Validating token with server...');
                 const response = await fetch('/api/v1/auth/me', {
                     headers: {
-                        'Authorization': `Bearer ${authToken}`
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json'
                     }
                 });
 
                 if (response.ok) {
                     currentUser = await response.json();
                     isAuthenticated = true;
+                    console.log('✅ User data loaded successfully:', currentUser);
                     updateUserInterface();
                 } else {
+                    console.log('❌ Token validation failed:', response.status);
                     // Токен недействителен
                     localStorage.removeItem('auth_token');
                     authToken = null;
                     isAuthenticated = false;
+                    currentUser = null;
                 }
             } catch (error) {
-                console.error('Error loading user data:', error);
+                console.error('❌ Error loading user data:', error);
+                localStorage.removeItem('auth_token');
+                authToken = null;
                 isAuthenticated = false;
+                currentUser = null;
             }
         }
 
