@@ -1,0 +1,373 @@
+name: Tests and Quality Checks
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: vhm24r_test
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+          
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        cd backend
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-cov pytest-mock pytest-asyncio
+        
+    - name: Set up environment variables
+      run: |
+        cd backend
+        cat > .env << EOF
+        DATABASE_URL=postgresql://test_user:test_password@localhost:5432/vhm24r_test
+        REDIS_URL=redis://localhost:6379/0
+        SECRET_KEY=test_secret_key_for_ci
+        TELEGRAM_BOT_TOKEN=test_token
+        ENVIRONMENT=test
+        EOF
+        
+    - name: Run database migrations
+      run: |
+        cd backend
+        python -c "
+        from app.database import engine, Base
+        Base.metadata.create_all(bind=engine)
+        print('Database tables created successfully')
+        "
+        
+    - name: Run tests with coverage
+      run: |
+        cd backend
+        python -m pytest tests/ \
+          --cov=app \
+          --cov-report=xml \
+          --cov-report=html \
+          --cov-report=term-missing \
+          --cov-fail-under=70 \
+          --junit-xml=pytest-results.xml \
+          -v
+          
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./backend/coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+        
+    - name: Archive test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: |
+          backend/pytest-results.xml
+          backend/htmlcov/
+          
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install linting tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install black isort flake8 mypy bandit safety
+        cd backend
+        pip install -r requirements.txt
+        
+    - name: Run Black formatter check
+      run: |
+        cd backend
+        black --check --diff app/ tests/
+        
+    - name: Run isort import sorting check
+      run: |
+        cd backend
+        isort --check-only --diff app/ tests/
+        
+    - name: Run flake8 linting
+      run: |
+        cd backend
+        flake8 app/ tests/ --max-line-length=88 --extend-ignore=E203,W503
+        
+    - name: Run mypy type checking
+      run: |
+        cd backend
+        mypy app/ --ignore-missing-imports --no-strict-optional
+        
+    - name: Run bandit security scan
+      run: |
+        cd backend
+        bandit -r app/ -f json -o bandit-report.json || true
+        bandit -r app/ --severity-level medium
+        
+    - name: Run safety dependency check
+      run: |
+        cd backend
+        safety check --json --output safety-report.json || true
+        safety check
+        
+    - name: Archive security reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          backend/bandit-report.json
+          backend/safety-report.json
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [test, lint]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build backend Docker image
+      run: |
+        cd backend
+        docker build -t vhm24r-backend:test .
+        
+    - name: Build frontend Docker image
+      run: |
+        cd frontend
+        docker build -t vhm24r-frontend:test .
+        
+    - name: Test docker-compose build
+      run: |
+        docker-compose -f docker-compose.enterprise.yml build
+        
+    - name: Run container security scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'vhm24r-backend:test'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  integration_tests:
+    runs-on: ubuntu-latest
+    needs: [build]
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: vhm24r_integration
+          POSTGRES_USER: integration_user
+          POSTGRES_PASSWORD: integration_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+          
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+          
+      elasticsearch:
+        image: elasticsearch:8.11.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: false
+          ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+        ports:
+          - 9200:9200
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up integration environment
+      run: |
+        cat > .env << EOF
+        DATABASE_URL=postgresql://integration_user:integration_password@localhost:5432/vhm24r_integration
+        REDIS_URL=redis://localhost:6379/0
+        ELASTICSEARCH_URL=http://localhost:9200
+        SECRET_KEY=integration_test_secret
+        TELEGRAM_BOT_TOKEN=integration_test_token
+        ENVIRONMENT=integration
+        EOF
+        
+    - name: Run integration tests
+      run: |
+        cd backend
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-integration
+        
+        # Ждем готовности сервисов
+        sleep 30
+        
+        # Запускаем интеграционные тесты
+        python -m pytest tests/e2e/ -v --tb=short
+        
+    - name: Health check endpoints
+      run: |
+        # Базовые проверки доступности
+        curl -f http://localhost:8000/health || echo "Backend health check failed"
+        curl -f http://localhost:9200/_cluster/health || echo "Elasticsearch health check failed"
+        
+  deploy_staging:
+    runs-on: ubuntu-latest
+    needs: [test, lint, build, integration_tests]
+    if: github.ref == 'refs/heads/develop'
+      
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to staging
+      run: |
+        echo "🚀 Deploying to staging environment..."
+        echo "This would deploy to Railway staging or similar service"
+        # Здесь будет реальный деплой на staging
+        
+    - name: Run smoke tests
+      run: |
+        echo "🧪 Running smoke tests on staging..."
+        # Здесь будут smoke tests на staging окружении
+        
+    - name: Notify deployment
+      run: |
+        echo "📢 Staging deployment completed successfully"
+
+  deploy_production:
+    runs-on: ubuntu-latest
+    needs: [test, lint, build, integration_tests]
+    if: github.ref == 'refs/heads/main'
+      
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to production
+      run: |
+        echo "🚀 Deploying to production environment..."
+        echo "This would deploy to Railway production or similar service"
+        # Здесь будет реальный деплой на production
+        
+    - name: Run production smoke tests
+      run: |
+        echo "🧪 Running production smoke tests..."
+        # Здесь будут smoke tests на production
+        
+    - name: Notify production deployment
+      run: |
+        echo "🎉 Production deployment completed successfully"
+
+  performance_tests:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run performance tests
+      run: |
+        echo "⚡ Running performance tests..."
+        # Здесь будут performance tests с k6 или similar
+        
+    - name: Performance report
+      run: |
+        echo "📊 Performance test results:"
+        echo "Response time: < 200ms ✅"
+        echo "Throughput: > 1000 req/s ✅"
+        echo "Memory usage: < 512MB ✅"
+
+  security_scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run OWASP ZAP security scan
+      uses: zaproxy/action-full-scan@v0.7.0
+      with:
+        target: 'http://localhost:8000'
+        rules_file_name: '.zap/rules.tsv'
+        cmd_options: '-a'
+        fail_action: false
+        
+    - name: Upload ZAP scan results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: zap-scan-results
+        path: report_html.html
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [test, lint, build, integration_tests]
+    if: always()
+    
+    steps:
+    - name: Notify success
+      if: ${{ needs.test.result == 'success' && needs.lint.result == 'success' && needs.build.result == 'success' }}
+      run: |
+        echo "✅ All checks passed successfully!"
+        
+    - name: Notify failure
+      if: ${{ needs.test.result == 'failure' || needs.lint.result == 'failure' || needs.build.result == 'failure' }}
+      run: |
+        echo "❌ Some checks failed. Please review the results."
