@@ -79,11 +79,8 @@ class SimpleDynamicAuth:
         if not session:
             return None
             
-        # Деактивируем сессию после использования (одноразовая)
-        db.query(TelegramSession).filter(
-            TelegramSession.session_token == session_token
-        ).update({"is_active": False})
-        db.commit()
+        # НЕ деактивируем сессию сразу - позволяем использовать токен для входа в WebApp
+        # Токен будет деактивирован автоматически по истечении времени
         
         # Явно приводим к int, чтобы избежать ошибок типизации
         return int(getattr(session, 'telegram_id'))

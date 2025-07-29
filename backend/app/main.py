@@ -277,8 +277,8 @@ async def session_auth_page(session_token: str):
                     document.getElementById('loading').classList.add('hidden');
                     document.getElementById('success').classList.remove('hidden');
                     
-                    // Определяем куда перенаправить пользователя
-                    const redirectUrl = data.user.role === 'admin' ? '/webapp' : '/webapp';
+                    // Определяем куда перенаправить пользователя с токеном
+                    const redirectUrl = `/webapp?token=${{data.access_token}}`;
                     
                     // Перенаправляем через 1.5 секунды
                     setTimeout(() => {{

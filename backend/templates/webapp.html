@@ -194,6 +194,21 @@
                     }
                 }
 
+                // Проверяем URL параметры для автоматической аутентификации
+                const urlParams = new URLSearchParams(window.location.search);
+                const autoToken = urlParams.get('token');
+                if (autoToken) {
+                    authToken = autoToken;
+                    localStorage.setItem('auth_token', autoToken);
+                    await loadUserData();
+                    if (isAuthenticated) {
+                        // Очищаем URL от параметров
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                        showMainInterface();
+                        return;
+                    }
+                }
+
                 // Если нет сохраненного токена, показываем сообщение о входе через бота
                 showTelegramLoginMessage();
                 
@@ -438,6 +453,21 @@
 
         // Проверка аутентификации
         async function checkAuthentication() {
+            // Сначала проверяем URL параметры
+            const urlParams = new URLSearchParams(window.location.search);
+            const autoToken = urlParams.get('token');
+            if (autoToken) {
+                authToken = autoToken;
+                localStorage.setItem('auth_token', autoToken);
+                // Очищаем URL от параметров
+                window.history.replaceState({}, document.title, window.location.pathname);
+                await loadUserData();
+                if (isAuthenticated) {
+                    showMainInterface();
+                    return;
+                }
+            }
+
             const savedToken = localStorage.getItem('auth_token');
             if (savedToken) {
                 authToken = savedToken;
@@ -445,12 +475,12 @@
                 if (isAuthenticated) {
                     showMainInterface();
                 } else {
+                    // Токен недействителен, удаляем его
+                    localStorage.removeItem('auth_token');
                     showTelegramLoginMessage();
                 }
             } else {
-                if (tg) {
-                    tg.showAlert('Пожалуйста, получите ссылку для входа через Telegram бот');
-                }
+                showTelegramLoginMessage();
             }
         }
 
