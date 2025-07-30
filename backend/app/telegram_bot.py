@@ -303,7 +303,7 @@ class EnhancedTelegramBot:
         
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🚀 Войти в систему", url=unique_link)
+                InlineKeyboardButton("🚀 Получить ссылку", callback_data="get_login_link")
             ],
             [
                 InlineKeyboardButton("📊 Мой статус", callback_data="user_status"),
@@ -466,6 +466,9 @@ class EnhancedTelegramBot:
         
         elif data == 'help_dynamic':
             await self.show_help_dynamic(query)
+        
+        elif data == 'get_login_link':
+            await self.send_login_link(query)
         
         elif data.startswith('approve_'):
             await self.process_approval(query, data)
@@ -648,7 +651,7 @@ class EnhancedTelegramBot:
                     
                     keyboard = InlineKeyboardMarkup([
                         [
-                            InlineKeyboardButton("🚀 ВОЙТИ В СИСТЕМУ", url=unique_link)
+                            InlineKeyboardButton("🚀 Получить доступ", callback_data="get_login_link")
                         ]
                     ])
                     
@@ -739,6 +742,60 @@ class EnhancedTelegramBot:
         finally:
             db.close()
     
+    async def send_login_link(self, query):
+        """Отправляет ссылку для входа пользователю"""
+        user = query.from_user
+        
+        db = SessionLocal()
+        try:
+            # Проверяем статус пользователя
+            db_user = crud.get_user_by_telegram_id(db, user.id)
+            if not db_user or str(db_user.status) != 'approved':
+                await query.answer("❌ Доступ запрещен", show_alert=True)
+                return
+            
+            # Генерируем ссылку
+            login_link = await self.generate_unique_user_link(int(db_user.id))
+            
+            # Отправляем ссылку
+            link_message = f"""
+🚀 <b>Ваша ссылка для входа в систему</b>
+
+🔗 Скопируйте и откройте в браузере:
+<code>{login_link}</code>
+
+⏱ <b>Действует:</b> 2 часа
+🔒 <b>Одноразовое использование</b>
+
+⚠️ <b>Важно:</b>
+• Не передавайте ссылку другим
+• После входа ссылка станет недействительной
+• При необходимости запросите новую ссылку
+
+<i>VHM24R - Система управления заказами</i>
+"""
+            
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🆕 Новая ссылка", callback_data="get_login_link")
+                ],
+                [
+                    InlineKeyboardButton("🔙 Назад в меню", callback_data="user_menu")
+                ]
+            ])
+            
+            await query.edit_message_text(
+                link_message,
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+            
+            # Уведомляем админа
+            await self.notify_admin_access(user.username or "unknown", "Запросил ссылку для входа")
+            
+        finally:
+            db.close()
+
     async def handle_user_callback(self, query, data):
         """Обработка пользовательских callback"""
         user = query.from_user
@@ -799,7 +856,7 @@ class EnhancedTelegramBot:
         """Обновление ссылки пользователя"""
         
         # Генерируем новую уникальную ссылку
-        new_link = await self.generate_unique_user_link(user_data.id)
+        new_link = await self.generate_unique_user_link(int(user_data.id))
         
         refresh_text = f"""
 🔄 <b>Ссылка обновлена!</b>
@@ -813,7 +870,7 @@ class EnhancedTelegramBot:
         
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🚀 ВОЙТИ ПО НОВОЙ ССЫЛКЕ", url=new_link)
+                InlineKeyboardButton("🔗 Скопировать ссылку", callback_data="user_refresh_link")
             ],
             [
                 InlineKeyboardButton("🔙 Назад в меню", callback_data="user_menu")
@@ -903,7 +960,7 @@ class EnhancedTelegramBot:
     async def admin_login_to_system(self, query):
         """Вход админа в систему с логином и паролем"""
         # Генерируем ссылку для админа используя TELEGRAM_ID, а не CHAT_ID
-        admin_link = await self.generate_unique_user_link(self.ADMIN_TELEGRAM_ID)
+        admin_link = await self.generate_unique_user_link(int(self.ADMIN_TELEGRAM_ID))
         
         # Генерируем логин и пароль для админа
         admin_login = "admin"
@@ -932,7 +989,7 @@ class EnhancedTelegramBot:
         
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("👑 ВОЙТИ КАК АДМИН", url=admin_link)
+                InlineKeyboardButton("🆕 Новая ссылка", callback_data="admin_new_link")
             ],
             [
                 InlineKeyboardButton("📋 Копировать данные", callback_data="copy_admin_credentials"),

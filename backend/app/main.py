@@ -212,9 +212,10 @@ async def health_check(db: Session = Depends(get_db)):
     }
 
 # Подключаем роутеры API
-from .api import auth, orders, analytics, files, export
+from .api import auth, auth_v2, orders, analytics, files, export
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
+app.include_router(auth_v2.router, tags=["Authentication v2.0"])  # Префикс уже в роутере
 app.include_router(orders.router, prefix="/api/v1/orders", tags=["orders"])
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 app.include_router(files.router, prefix="/api/v1/files", tags=["files"])

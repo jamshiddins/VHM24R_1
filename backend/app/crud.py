@@ -456,6 +456,56 @@ class AnalyticsCrud:
         # В реальном приложении здесь будет создание записи в таблице аналитики
         pass
 
+# === СЕССИИ TELEGRAM ===
+
+def get_session_by_token(db: Session, session_token: str):
+    """Получение сессии по токену"""
+    from .models import TelegramSession
+    return db.query(TelegramSession).filter(TelegramSession.session_token == session_token).first()
+
+def deactivate_session(db: Session, session_token: str):
+    """Деактивация конкретной сессии"""
+    from .models import TelegramSession
+    session = db.query(TelegramSession).filter(TelegramSession.session_token == session_token).first()
+    if session:
+        setattr(session, 'is_active', False)
+        db.commit()
+
+def deactivate_user_sessions(db: Session, user_id: int):
+    """Деактивация всех сессий пользователя"""
+    from .models import TelegramSession
+    sessions = db.query(TelegramSession).filter(TelegramSession.telegram_id == user_id).all()
+    for session in sessions:
+        setattr(session, 'is_active', False)
+    db.commit()
+
+def get_user_sessions(db: Session, user_id: int):
+    """Получение всех сессий пользователя"""
+    from .models import TelegramSession
+    return db.query(TelegramSession).filter(TelegramSession.telegram_id == user_id).all()
+
+def get_active_sessions(db: Session, user_id: int):
+    """Получение активных сессий пользователя"""
+    from .models import TelegramSession
+    return db.query(TelegramSession).filter(
+        TelegramSession.telegram_id == user_id,
+        TelegramSession.is_active.is_(True),
+        TelegramSession.expires_at > datetime.utcnow()
+    ).all()
+
+def cleanup_expired_sessions(db: Session):
+    """Очистка истекших сессий"""
+    from .models import TelegramSession
+    expired_sessions = db.query(TelegramSession).filter(
+        TelegramSession.expires_at < datetime.utcnow()
+    ).all()
+    
+    for session in expired_sessions:
+        setattr(session, 'is_active', False)
+    
+    db.commit()
+    return len(expired_sessions)
+
 # Глобальные экземпляры CRUD
 order_crud = OrderCrud()
 order_change_crud = OrderChangeCrud()
