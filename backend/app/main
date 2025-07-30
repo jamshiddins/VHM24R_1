@@ -1,0 +1,168 @@
+"""
+Entry point for the VHM24R FastAPI application.
+
+This version has been modified to include structured logging, error
+handling, metrics collection, rate limiting, security headers, and
+monitoring endpoints. Integrate additional routes and business logic
+as needed.
+"""
+
+import os
+import asyncio
+import json
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import List
+
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, WebSocket, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session
+
+from .database import get_db, init_db
+from .models import User, UploadedFile, Order, OrderChange, TelegramSession
+from .schemas import *  # noqa: F401,F403
+from .auth import get_current_user, get_current_admin_user
+from .services.unified_auth import unified_auth_service
+from . import crud
+
+from .utils.logger import setup_logging
+from .middleware.error_handler import ErrorHandlerMiddleware
+from .middleware.metrics_middleware import MetricsMiddleware
+from .middleware.security_headers import SecurityHeadersMiddleware
+from .middleware.rate_limiter import RateLimiter
+
+from .routers.monitoring import router as monitoring_router
+
+import redis
+
+
+# Initialise logging before creating the app
+setup_logging()
+
+app = FastAPI(
+    title="VHM24R Order Management System",
+    description="Система загрузки, сверки и анализа заказов VHM24R",
+    version="1.0.2",
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.getenv("FRONTEND_URL", "*")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Error handling and security middleware
+app.add_middleware(ErrorHandlerMiddleware)
+app.add_middleware(MetricsMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Rate limiter configuration
+redis_url = os.getenv("REDIS_URL")
+if redis_url:
+    redis_client = redis.from_url(redis_url)
+    app.add_middleware(RateLimiter, redis_client=redis_client, max_requests=100, window=3600)
+
+# Security scheme
+security = HTTPBearer()
+
+# ==== Startup and shutdown hooks ====
+
+# WebSocket connections
+active_connections: List[WebSocket] = []
+
+
+async def cleanup_expired_sessions() -> None:
+    """Background task to clean up expired sessions."""
+    from .services.dynamic_auth import DynamicAuthService
+    dynamic_auth_service = DynamicAuthService()
+    while True:
+        await dynamic_auth_service.cleanup_expired_sessions()
+        await asyncio.sleep(300)
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    """Initialization logic executed on application startup."""
+    init_db()
+    # Launch background cleanup task
+    asyncio.create_task(cleanup_expired_sessions())
+    # Launch Telegram bot if configured
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if telegram_token:
+        from .telegram_bot import EnhancedTelegramBot
+        bot = EnhancedTelegramBot(telegram_token)
+        asyncio.create_task(bot.run())
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    """Cleanup logic executed on application shutdown."""
+    # Stop background tasks or close resources if necessary
+    pass
+
+# ==== Static files and templates ====
+
+project_root = Path(__file__).parent.parent.parent
+frontend_path = project_root / "frontend"
+templates_path = Path(__file__).parent.parent / "templates"
+
+if frontend_path.exists():
+    app.mount("/static", StaticFiles(directory=str(frontend_path)), name="static")
+
+templates = Jinja2Templates(directory=str(templates_path))
+
+
+# ==== Routes ====
+
+@app.get("/")
+async def root() -> dict:
+    """Root endpoint providing a simple status message."""
+    frontend_file = frontend_path / "index.html"
+    if frontend_file.exists():
+        return FileResponse(str(frontend_file), media_type="text/html")
+    return {"message": "VHM24R API is running", "version": app.version}
+
+
+@app.get("/health")
+async def health_check(db: Session = Depends(get_db)) -> dict:
+    """Basic health check for system dependencies."""
+    services: dict = {}
+    overall_status = "healthy"
+    # Database check
+    try:
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+        services["database"] = "connected"
+    except Exception as exc:
+        services["database"] = f"error: {exc}"  # type: ignore[str]
+        overall_status = "unhealthy"
+    # Redis check
+    try:
+        if redis_url:
+            redis_client.ping()
+            services["redis"] = "connected"
+        else:
+            services["redis"] = "not configured"
+    except Exception as exc:
+        services["redis"] = f"error: {exc}"
+    return {
+        "status": overall_status,
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": app.version,
+        "services": services,
+    }
+
+
+# Include monitoring routes
+app.include_router(monitoring_router, prefix="/monitoring", tags=["monitoring"])
+
+
+# Note: Additional routers for authentication, orders, analytics, files and export
+# should be included below using app.include_router() calls.

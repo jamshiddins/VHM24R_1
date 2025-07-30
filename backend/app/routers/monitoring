@@ -1,0 +1,27 @@
+"""
+Monitoring endpoints for VHM24R.
+
+This router exposes Prometheus metrics and a detailed health check.
+Integrate it into the main FastAPI application using
+``app.include_router(monitoring_router, prefix="/monitoring")``.
+"""
+
+from fastapi import APIRouter, Response
+from prometheus_client import generate_latest
+
+from ..services.metrics_service import get_prometheus_metrics, detailed_health_check
+
+
+router = APIRouter()
+
+
+@router.get("/metrics")
+async def metrics() -> Response:
+    """Expose Prometheus metrics in plain text format."""
+    return Response(generate_latest(), media_type="text/plain")
+
+
+@router.get("/health/detailed")
+async def health() -> dict:
+    """Return detailed health information for system dependencies."""
+    return await detailed_health_check()
