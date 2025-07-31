@@ -297,9 +297,7 @@ celerybeat-schedule.*
 local_settings.py
 
 # Test files
-test_*.py
 *_test.py
-tests/
 
 # Documentation build
 docs/build/
@@ -655,9 +653,7 @@ log/
 temp/
 
 # Ignore test files and coverage
-test_*.py
 *_test.py
-tests/
 .coverage
 htmlcov/
 .pytest_cache/
