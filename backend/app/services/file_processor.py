@@ -1,6 +1,5 @@
 import os
 import asyncio
-import logging
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import pandas as pd
@@ -47,12 +46,21 @@ except ImportError:
     Document = None
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from ..database import SessionLocal
 from .. import crud, schemas
+from ..utils.logger import get_logger, performance_logger, db_logger
+from ..utils.exceptions import (
+    FileProcessingError, 
+    DatabaseError, 
+    ValidationError,
+    ExternalServiceError,
+    handle_file_processing_error,
+    handle_database_error,
+    handle_validation_error
+)
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class EnhancedFileProcessor:
     """Улучшенный процессор файлов с поддержкой 12 форматов"""
@@ -89,66 +97,175 @@ class EnhancedFileProcessor:
     
     async def process_file(self, file_path: str, order_id: int, user_id: int) -> Dict[str, Any]:
         """Основная функция обработки файла"""
+        start_time = datetime.now()
+        
+        logger.info(
+            "File processing started",
+            file_path=file_path,
+            order_id=order_id,
+            user_id=user_id
+        )
+        
         db = self.get_db()
         try:
             # Получаем информацию о заказе
-            order = crud.order_crud.get_order(db, order_id)
-            if not order:
-                raise ValueError(f"Заказ {order_id} не найден")
+            try:
+                order = crud.order_crud.get_order(db, order_id)
+                if not order:
+                    raise FileProcessingError(
+                        message=f"Заказ {order_id} не найден",
+                        processing_stage="order_validation"
+                    )
+            except SQLAlchemyError as e:
+                raise handle_database_error("get_order", "orders", e)
             
             # Обновляем статус заказа
-            crud.update_order(db, order_id, {
-                "status": "processing",
-                "progress_percentage": 0.0
-            })
+            try:
+                crud.update_order(db, order_id, {
+                    "status": "processing",
+                    "progress_percentage": 0.0
+                })
+                db_logger.log_query("UPDATE", "orders", {"order_id": order_id, "status": "processing"})
+            except SQLAlchemyError as e:
+                raise handle_database_error("update_order", "orders", e)
             
             # Определяем формат файла
-            file_format = self._detect_file_format(file_path)
-            logger.info(f"Обработка файла {file_path} формата {file_format}")
-            
-            # Записываем аналитику (заглушка)
-            logger.info(f"Аналитика: начало обработки файла {file_format}")
+            try:
+                file_format = self._detect_file_format(file_path)
+                logger.info(
+                    "File format detected",
+                    file_path=file_path,
+                    file_format=file_format,
+                    order_id=order_id
+                )
+            except Exception as e:
+                raise handle_file_processing_error(
+                    filename=os.path.basename(file_path),
+                    stage="format_detection",
+                    original_error=e
+                )
             
             # Обрабатываем файл в зависимости от формата
-            result = await self._process_by_format(file_path, file_format, order_id, db)
+            try:
+                result = await self._process_by_format(file_path, file_format, order_id, db)
+                
+                logger.info(
+                    "File processing completed successfully",
+                    file_path=file_path,
+                    file_format=file_format,
+                    total_rows=result.get('total_rows', 0),
+                    processed_rows=result.get('processed_rows', 0)
+                )
+            except Exception as e:
+                raise handle_file_processing_error(
+                    filename=os.path.basename(file_path),
+                    stage="format_processing",
+                    original_error=e
+                )
             
             # Обновляем заказ с результатами
-            crud.update_order(db, order_id, {
-                "status": "completed",
-                "progress_percentage": 100.0,
-                "total_rows": result.get('total_rows', 0),
-                "processed_rows": result.get('processed_rows', 0),
-                "metadata": result.get('metadata', {})
-            })
+            try:
+                crud.update_order(db, order_id, {
+                    "status": "completed",
+                    "progress_percentage": 100.0,
+                    "total_rows": result.get('total_rows', 0),
+                    "processed_rows": result.get('processed_rows', 0),
+                    "metadata": result.get('metadata', {})
+                })
+                db_logger.log_query("UPDATE", "orders", {"order_id": order_id, "status": "completed"})
+            except SQLAlchemyError as e:
+                logger.error("Failed to update order completion status", order_id=order_id, error=str(e))
+                # Не прерываем выполнение, так как файл уже обработан
             
-            # Записываем аналитику завершения (заглушка)
-            logger.info(f"Аналитика: завершение обработки файла")
+            execution_time = (datetime.now() - start_time).total_seconds()
+            performance_logger.log_api_performance(
+                endpoint="process_file",
+                method="POST",
+                response_time=execution_time,
+                status_code=200
+            )
             
-            logger.info(f"Файл {file_path} успешно обработан")
+            logger.info(
+                "File processing finished successfully",
+                file_path=file_path,
+                order_id=order_id,
+                execution_time=execution_time,
+                total_rows=result.get('total_rows', 0)
+            )
+            
             return result
             
+        except FileProcessingError:
+            # Перебрасываем FileProcessingError как есть
+            raise
+        except DatabaseError:
+            # Перебрасываем DatabaseError как есть
+            raise
         except Exception as e:
-            logger.error(f"Ошибка при обработке файла {file_path}: {str(e)}")
+            logger.error(
+                "Unexpected error in file processing",
+                file_path=file_path,
+                order_id=order_id,
+                user_id=user_id,
+                error=str(e),
+                error_type=type(e).__name__
+            )
             
             # Обновляем статус заказа на ошибку
-            crud.update_order(db, order_id, {
-                "status": "cancelled",
-                "metadata": {"error": str(e)}
-            })
+            try:
+                crud.update_order(db, order_id, {
+                    "status": "cancelled",
+                    "metadata": {"error": str(e)}
+                })
+            except Exception:
+                pass  # Игнорируем ошибки при обновлении статуса
             
-            # Записываем аналитику ошибки (заглушка)
-            logger.error(f"Аналитика: ошибка обработки файла - {str(e)}")
-            
-            raise
+            raise handle_file_processing_error(
+                filename=os.path.basename(file_path),
+                stage="unknown",
+                original_error=e
+            )
         finally:
             db.close()
     
     def _detect_file_format(self, file_path: str) -> str:
         """Определяет формат файла по расширению"""
-        extension = Path(file_path).suffix.lower().lstrip('.')
-        if extension in self.SUPPORTED_FORMATS:
-            return extension
-        raise ValueError(f"Неподдерживаемый формат файла: {extension}")
+        try:
+            if not os.path.exists(file_path):
+                raise FileProcessingError(
+                    message=f"Файл не найден: {file_path}",
+                    filename=os.path.basename(file_path),
+                    processing_stage="file_existence_check"
+                )
+            
+            extension = Path(file_path).suffix.lower().lstrip('.')
+            
+            if not extension:
+                raise FileProcessingError(
+                    message="Файл не имеет расширения",
+                    filename=os.path.basename(file_path),
+                    processing_stage="extension_detection"
+                )
+            
+            if extension in self.SUPPORTED_FORMATS:
+                logger.info(f"File format detected: {extension}", filename=os.path.basename(file_path))
+                return extension
+            
+            raise FileProcessingError(
+                message=f"Неподдерживаемый формат файла: {extension}",
+                filename=os.path.basename(file_path),
+                file_format=extension,
+                processing_stage="format_validation"
+            )
+            
+        except FileProcessingError:
+            raise
+        except Exception as e:
+            raise handle_file_processing_error(
+                filename=os.path.basename(file_path),
+                stage="format_detection",
+                original_error=e
+            )
     
     async def _process_by_format(self, file_path: str, file_format: str, order_id: int, db: Session) -> Dict[str, Any]:
         """Обрабатывает файл в зависимости от формата"""

@@ -44,11 +44,28 @@ from .auth import get_current_user, get_current_admin_user
 from .services.unified_auth import unified_auth_service
 from . import crud
 
+# Импорты для логирования и обработки ошибок
+from .utils.logger import get_logger, setup_logging
+from .utils.exceptions import (
+    VHMException, 
+    AuthenticationError, 
+    FileProcessingError, 
+    DatabaseError
+)
+from .middleware.error_handler import add_error_handling_middleware
+
+# Настройка логирования
+setup_logging()
+logger = get_logger(__name__)
+
 app = FastAPI(
     title="VHM24R Order Management System",
     description="Система загрузки, сверки и анализа заказов VHM24R",
     version="1.0.1"
 )
+
+# Добавляем middleware для обработки ошибок
+add_error_handling_middleware(app)
 
 # CORS middleware
 app.add_middleware(
@@ -69,10 +86,21 @@ async def cleanup_expired_sessions():
 @app.on_event("startup")
 async def startup_event():
     """Инициализация при запуске"""
-    init_db()
+    logger.info("VHM24R application startup initiated", version="1.0.1")
+    
+    try:
+        init_db()
+        logger.info("Database initialization completed")
+    except Exception as e:
+        logger.error("Database initialization failed", error=str(e))
+        raise
     
     # Запускаем задачу очистки сессий
-    asyncio.create_task(cleanup_expired_sessions())
+    try:
+        asyncio.create_task(cleanup_expired_sessions())
+        logger.info("Session cleanup task started")
+    except Exception as e:
+        logger.error("Failed to start session cleanup task", error=str(e))
     
     # Запускаем Telegram бота в фоне
     try:
@@ -84,11 +112,13 @@ async def startup_event():
             import threading
             bot_thread = threading.Thread(target=bot.start_bot, daemon=True)
             bot_thread.start()
-            print("🤖 Telegram Bot: Started in background thread")
+            logger.info("Telegram Bot started successfully in background thread")
         else:
-            print("TELEGRAM_BOT_TOKEN not found, skipping bot initialization")
+            logger.warning("TELEGRAM_BOT_TOKEN not found, skipping bot initialization")
     except Exception as e:
-        print(f"Failed to start Telegram bot: {e}")
+        logger.error("Failed to start Telegram bot", error=str(e))
+    
+    logger.info("VHM24R application startup completed successfully")
 
 security = HTTPBearer()
 

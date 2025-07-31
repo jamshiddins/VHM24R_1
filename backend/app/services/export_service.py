@@ -1,6 +1,5 @@
 import os
 import tempfile
-import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import pandas as pd
@@ -36,12 +35,19 @@ except ImportError:
     SimpleDocTemplate = None
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from ..database import SessionLocal
 from .. import crud, schemas
+from ..utils.logger import get_logger, performance_logger
+from ..utils.exceptions import (
+    FileProcessingError, 
+    DatabaseError, 
+    ExternalServiceError,
+    handle_file_processing_error,
+    handle_database_error
+)
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class ExportService:
     """Сервис экспорта данных в различные форматы"""
@@ -57,26 +63,56 @@ class ExportService:
     
     async def export_order_data(self, export_request: schemas.ExportRequest, user_id: int) -> schemas.ExportResponse:
         """Экспортирует данные заказа в указанном формате"""
+        start_time = datetime.now()
+        
+        logger.info(
+            "Export order data started",
+            user_id=user_id,
+            order_id=export_request.order_id,
+            export_format=export_request.export_format
+        )
+        
         db = self.get_db()
         try:
             # Проверяем права доступа к заказу
             if export_request.order_id:
-                order = crud.order_crud.get_order(db, export_request.order_id)
-                if not order:
-                    raise ValueError("Заказ не найден")
+                try:
+                    order = crud.order_crud.get_order(db, export_request.order_id)
+                    if not order:
+                        raise FileProcessingError(
+                            message="Заказ не найден",
+                            processing_stage="access_check"
+                        )
+                except SQLAlchemyError as e:
+                    raise handle_database_error("get_order", "orders", e)
             else:
                 order = None
             
+            # Проверка прав доступа
             if order and hasattr(order, 'user_id') and order.user_id != user_id:
-                user = crud.get_user_by_id(db, user_id)
-                if not user or not getattr(user, 'is_admin', False):
-                    raise ValueError("Нет прав доступа к этому заказу")
+                try:
+                    user = crud.get_user_by_id(db, user_id)
+                    if not user or not getattr(user, 'is_admin', False):
+                        raise FileProcessingError(
+                            message="Нет прав доступа к этому заказу",
+                            processing_stage="authorization_check"
+                        )
+                except SQLAlchemyError as e:
+                    raise handle_database_error("get_user", "users", e)
             
             # Получаем данные для экспорта
             export_data = await self._prepare_export_data(order, export_request, db)
             
             # Экспортируем в указанном формате
             order_number = getattr(order, 'order_number', 'unknown') if order else 'unknown'
+            
+            logger.info(
+                "Starting export to format",
+                order_number=order_number,
+                format=export_request.export_format,
+                changes_count=len(export_data.get('changes', []))
+            )
+            
             file_path = await self._export_by_format(
                 export_data, 
                 export_request.export_format, 
@@ -84,11 +120,34 @@ class ExportService:
             )
             
             # Получаем информацию о файле
-            file_size = os.path.getsize(file_path)
-            filename = os.path.basename(file_path)
+            try:
+                file_size = os.path.getsize(file_path)
+                filename = os.path.basename(file_path)
+            except OSError as e:
+                raise handle_file_processing_error(
+                    filename=file_path,
+                    stage="file_info_retrieval",
+                    original_error=e
+                )
             
-            # Создаем URL для скачивания (в реальном приложении это будет URL к файлу)
+            # Создаем URL для скачивания
             download_url = f"/api/v1/export/download/{filename}"
+            
+            execution_time = (datetime.now() - start_time).total_seconds()
+            performance_logger.log_api_performance(
+                endpoint="export_order_data",
+                method="POST",
+                response_time=execution_time,
+                status_code=200
+            )
+            
+            logger.info(
+                "Export completed successfully",
+                order_number=order_number,
+                filename=filename,
+                file_size=file_size,
+                execution_time=execution_time
+            )
             
             return schemas.ExportResponse(
                 download_url=download_url,
@@ -97,69 +156,142 @@ class ExportService:
                 expires_at=datetime.now() + timedelta(hours=24)
             )
             
-        except Exception as e:
-            logger.error(f"Ошибка экспорта: {str(e)}")
+        except FileProcessingError:
+            # Перебрасываем FileProcessingError как есть
             raise
+        except DatabaseError:
+            # Перебрасываем DatabaseError как есть
+            raise
+        except Exception as e:
+            logger.error(
+                "Unexpected error in export_order_data",
+                user_id=user_id,
+                order_id=export_request.order_id,
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            raise handle_file_processing_error(
+                filename="export_request",
+                stage="unknown",
+                original_error=e
+            )
         finally:
             db.close()
     
     async def _prepare_export_data(self, order, export_request: schemas.ExportRequest, db: Session) -> Dict[str, Any]:
         """Подготавливает данные для экспорта"""
         
-        # Базовая информация о заказе
-        export_data = {
-            'order_info': {
-                'order_number': order.order_number,
-                'filename': order.original_filename,
-                'format': order.file_format,
-                'status': order.status,
-                'created_at': order.created_at.isoformat(),
-                'total_rows': order.total_rows,
-                'processed_rows': order.processed_rows,
-                'progress': order.progress_percentage
-            },
-            'changes': [],
-            'summary': {}
-        }
+        logger.info(
+            "Preparing export data",
+            order_id=getattr(order, 'id', None),
+            include_changes=export_request.include_changes
+        )
         
-        # Получаем изменения если требуется
-        if export_request.include_changes and order:
-            changes = crud.order_change_crud.get_changes_by_order(db, order.id)
+        try:
+            # Базовая информация о заказе
+            if order:
+                export_data = {
+                    'order_info': {
+                        'order_number': getattr(order, 'order_number', 'unknown'),
+                        'filename': getattr(order, 'original_filename', 'unknown'),
+                        'format': getattr(order, 'file_format', 'unknown'),
+                        'status': getattr(order, 'status', 'unknown'),
+                        'created_at': getattr(order, 'created_at', datetime.now()).isoformat(),
+                        'total_rows': getattr(order, 'total_rows', 0),
+                        'processed_rows': getattr(order, 'processed_rows', 0),
+                        'progress': getattr(order, 'progress_percentage', 0)
+                    },
+                    'changes': [],
+                    'summary': {}
+                }
+            else:
+                export_data = {
+                    'order_info': {
+                        'order_number': 'no_order',
+                        'filename': 'no_order',
+                        'format': 'unknown',
+                        'status': 'no_order',
+                        'created_at': datetime.now().isoformat(),
+                        'total_rows': 0,
+                        'processed_rows': 0,
+                        'progress': 0
+                    },
+                    'changes': [],
+                    'summary': {}
+                }
             
-            # Применяем фильтры если есть
-            if export_request.filters:
-                changes = self._apply_filters(changes, export_request.filters)
+            # Получаем изменения если требуется
+            if export_request.include_changes and order:
+                try:
+                    changes = crud.order_change_crud.get_changes_by_order(db, order.id)
+                    
+                    logger.info(f"Retrieved {len(changes)} changes for order", order_id=order.id)
+                    
+                    # Применяем фильтры если есть
+                    if export_request.filters:
+                        original_count = len(changes)
+                        changes = self._apply_filters(changes, export_request.filters)
+                        logger.info(
+                            f"Applied filters: {original_count} -> {len(changes)} changes",
+                            filters=export_request.filters
+                        )
+                    
+                    # Преобразуем изменения в удобный формат
+                    changes_data = []
+                    for change in changes:
+                        try:
+                            changes_data.append({
+                                'row_number': getattr(change, 'row_number', 0),
+                                'column_name': getattr(change, 'column_name', ''),
+                                'old_value': getattr(change, 'old_value', ''),
+                                'new_value': getattr(change, 'new_value', ''),
+                                'change_type': getattr(change, 'change_type', ''),
+                                'created_at': getattr(change, 'created_at', datetime.now()).isoformat()
+                            })
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to process change record",
+                                change_id=getattr(change, 'id', 'unknown'),
+                                error=str(e)
+                            )
+                            continue
+                    
+                    export_data['changes'] = changes_data
+                    
+                    # Создаем сводку по типам изменений
+                    change_summary = {}
+                    for change in changes:
+                        change_type = getattr(change, 'change_type', 'unknown')
+                        if change_type not in change_summary:
+                            change_summary[change_type] = 0
+                        change_summary[change_type] += 1
+                    
+                    export_data['summary'] = {
+                        'total_changes': len(changes),
+                        'by_type': change_summary,
+                        'export_date': datetime.now().isoformat(),
+                        'export_format': export_request.export_format
+                    }
+                    
+                except SQLAlchemyError as e:
+                    logger.error(f"Database error getting changes", error=str(e))
+                    raise handle_database_error("get_changes_by_order", "order_changes", e)
             
-            # Преобразуем изменения в удобный формат
-            changes_data = []
-            for change in changes:
-                changes_data.append({
-                    'row_number': change.row_number,
-                    'column_name': change.column_name,
-                    'old_value': change.old_value,
-                    'new_value': change.new_value,
-                    'change_type': change.change_type,
-                    'created_at': change.created_at.isoformat()
-                })
+            logger.info(
+                "Export data prepared successfully",
+                changes_count=len(export_data['changes']),
+                has_summary=bool(export_data['summary'])
+            )
             
-            export_data['changes'] = changes_data
+            return export_data
             
-            # Создаем сводку по типам изменений
-            change_summary = {}
-            for change in changes:
-                change_type = change.change_type
-                if change_type not in change_summary:
-                    change_summary[change_type] = 0
-                change_summary[change_type] += 1
-            
-            export_data['summary'] = {
-                'total_changes': len(changes),
-                'by_type': change_summary,
-                'export_date': datetime.now().isoformat(),
-                'export_format': export_request.export_format
-            }
-        
-        return export_data
+        except Exception as e:
+            logger.error(f"Error preparing export data", error=str(e), error_type=type(e).__name__)
+            raise handle_file_processing_error(
+                filename="export_data",
+                stage="data_preparation",
+                original_error=e
+            )
     
     def _apply_filters(self, changes: List, filters: Dict[str, Any]) -> List:
         """Применяет фильтры к изменениям"""

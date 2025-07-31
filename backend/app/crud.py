@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func, desc, text
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, date, timedelta
 from .models import (
@@ -9,7 +10,11 @@ from .models import (
     UploadedFile, Order
 )
 from .schemas import UserCreate, UploadedFileCreate, OrderFilters
+from .utils.logger import get_logger, db_logger
+from .utils.exceptions import DatabaseError, handle_database_error
 import uuid
+
+logger = get_logger(__name__)
 
 # === ПОЛЬЗОВАТЕЛИ ===
 
@@ -213,49 +218,61 @@ def update_order(db: Session, order_id: int, order_data: Dict[str, Any], file_id
     return order
 
 def get_orders_with_filters(db: Session, filters: OrderFilters, page: int, page_size: int) -> Tuple[List[Order], int]:
-    query = db.query(Order)
-    
-    # Применяем фильтры
-    if filters.order_number:
-        query = query.filter(Order.order_number.ilike(f'%{filters.order_number}%'))
-    
-    if filters.machine_code:
-        query = query.filter(Order.machine_code == filters.machine_code)
-    
-    if filters.payment_type:
-        query = query.filter(Order.payment_type == filters.payment_type)
-    
-    if filters.match_status:
-        query = query.filter(Order.match_status == filters.match_status)
-    
-    if filters.date_from:
-        try:
-            date_from = datetime.fromisoformat(filters.date_from)
-            query = query.filter(Order.creation_time >= date_from)
-        except:
-            pass
-    
-    if filters.date_to:
-        try:
-            date_to = datetime.fromisoformat(filters.date_to)
-            query = query.filter(Order.creation_time <= date_to)
-        except:
-            pass
-    
-    # Фильтр по типу изменений
-    if filters.change_type:
-        subquery = db.query(OrderChange.order_id).filter(
-            OrderChange.change_type == filters.change_type
-        ).distinct()
-        query = query.filter(Order.id.in_(subquery))
-    
-    # Подсчитываем общее количество
-    total = query.count()
-    
-    # Применяем пагинацию
-    orders = query.offset((page - 1) * page_size).limit(page_size).all()
-    
-    return orders, total
+    try:
+        db_logger.log_query("SELECT", "orders", filters.dict() if filters else None)
+        
+        query = db.query(Order)
+        
+        # Применяем фильтры
+        if filters.order_number:
+            query = query.filter(Order.order_number.ilike(f'%{filters.order_number}%'))
+        
+        if filters.machine_code:
+            query = query.filter(Order.machine_code == filters.machine_code)
+        
+        if filters.payment_type:
+            query = query.filter(Order.payment_type == filters.payment_type)
+        
+        if filters.match_status:
+            query = query.filter(Order.match_status == filters.match_status)
+        
+        if filters.date_from:
+            try:
+                date_from = datetime.fromisoformat(filters.date_from)
+                query = query.filter(Order.creation_time >= date_from)
+            except ValueError as e:
+                logger.warning(f"Invalid date_from format: {filters.date_from}", error=str(e))
+                raise DatabaseError(f"Некорректный формат даты 'с': {filters.date_from}")
+        
+        if filters.date_to:
+            try:
+                date_to = datetime.fromisoformat(filters.date_to)
+                query = query.filter(Order.creation_time <= date_to)
+            except ValueError as e:
+                logger.warning(f"Invalid date_to format: {filters.date_to}", error=str(e))
+                raise DatabaseError(f"Некорректный формат даты 'до': {filters.date_to}")
+        
+        # Фильтр по типу изменений
+        if filters.change_type:
+            subquery = db.query(OrderChange.order_id).filter(
+                OrderChange.change_type == filters.change_type
+            ).distinct()
+            query = query.filter(Order.id.in_(subquery))
+        
+        # Подсчитываем общее количество
+        total = query.count()
+        
+        # Применяем пагинацию
+        orders = query.offset((page - 1) * page_size).limit(page_size).all()
+        
+        logger.info(f"Retrieved {len(orders)} orders out of {total} total", 
+                   page=page, page_size=page_size)
+        
+        return orders, total
+        
+    except SQLAlchemyError as e:
+        logger.error(f"Database error in get_orders_with_filters", error=str(e))
+        raise handle_database_error("get_orders_with_filters", "orders", e)
 
 def get_order(db: Session, order_id: int) -> Optional[Order]:
     return db.query(Order).filter(Order.id == order_id).first()
@@ -308,78 +325,94 @@ def get_order_versions(db: Session, order_number: str) -> List[Dict]:
 # === АНАЛИТИКА ===
 
 def get_analytics_data(db: Session, date_from: Optional[str], date_to: Optional[str], group_by: str) -> Dict:
-    query = db.query(Order)
-    
-    # Применяем фильтры дат
-    if date_from:
-        try:
-            date_from_dt = datetime.fromisoformat(date_from)
-            query = query.filter(Order.creation_time >= date_from_dt)
-        except:
-            pass
-    if date_to:
-        try:
-            date_to_dt = datetime.fromisoformat(date_to)
-            query = query.filter(Order.creation_time <= date_to_dt)
-        except:
-            pass
-    
-    # Общая статистика
-    total_orders = query.count()
-    total_revenue = query.with_entities(func.sum(Order.order_price)).scalar() or 0
-    
-    # Статистика по типам оплаты
-    payment_stats = db.query(
-        Order.payment_type,
-        func.count(Order.id).label('count'),
-        func.sum(Order.order_price).label('total')
-    ).group_by(Order.payment_type).all()
-    
-    # Статистика по автоматам
-    machine_stats = db.query(
-        Order.machine_code,
-        func.count(Order.id).label('count'),
-        func.sum(Order.order_price).label('total')
-    ).group_by(Order.machine_code).limit(10).all()
-    
-    # Временные тренды
-    time_stats = db.query(
-        func.date(Order.creation_time).label('period'),
-        func.count(Order.id).label('count'),
-        func.sum(Order.order_price).label('total')
-    ).group_by(func.date(Order.creation_time)).order_by(func.date(Order.creation_time)).all()
-    
-    return {
-        'summary': {
-            'total_orders': total_orders,
-            'total_revenue': float(total_revenue),
-            'avg_order_value': float(total_revenue / total_orders) if total_orders > 0 else 0
-        },
-        'payment_types': [
-            {
-                'type': stat.payment_type or 'Unknown',
-                'count': stat.count,
-                'total': float(stat.total or 0)
-            }
-            for stat in payment_stats
-        ],
-        'top_machines': [
-            {
-                'machine_code': stat.machine_code or 'Unknown',
-                'count': stat.count,
-                'total': float(stat.total or 0)
-            }
-            for stat in machine_stats
-        ],
-        'time_series': [
-            {
-                'period': stat.period.isoformat() if stat.period else None,
-                'count': stat.count,
-                'total': float(stat.total or 0)
-            }
-            for stat in time_stats
-        ]
-    }
+    try:
+        db_logger.log_query("SELECT", "orders", {
+            "date_from": date_from, 
+            "date_to": date_to, 
+            "group_by": group_by
+        })
+        
+        query = db.query(Order)
+        
+        # Применяем фильтры дат
+        if date_from:
+            try:
+                date_from_dt = datetime.fromisoformat(date_from)
+                query = query.filter(Order.creation_time >= date_from_dt)
+            except ValueError as e:
+                logger.warning(f"Invalid date_from format in analytics: {date_from}", error=str(e))
+                raise DatabaseError(f"Некорректный формат даты 'с' для аналитики: {date_from}")
+        
+        if date_to:
+            try:
+                date_to_dt = datetime.fromisoformat(date_to)
+                query = query.filter(Order.creation_time <= date_to_dt)
+            except ValueError as e:
+                logger.warning(f"Invalid date_to format in analytics: {date_to}", error=str(e))
+                raise DatabaseError(f"Некорректный формат даты 'до' для аналитики: {date_to}")
+        
+        # Общая статистика
+        total_orders = query.count()
+        total_revenue = query.with_entities(func.sum(Order.order_price)).scalar() or 0
+        
+        # Статистика по типам оплаты
+        payment_stats = db.query(
+            Order.payment_type,
+            func.count(Order.id).label('count'),
+            func.sum(Order.order_price).label('total')
+        ).group_by(Order.payment_type).all()
+        
+        # Статистика по автоматам
+        machine_stats = db.query(
+            Order.machine_code,
+            func.count(Order.id).label('count'),
+            func.sum(Order.order_price).label('total')
+        ).group_by(Order.machine_code).limit(10).all()
+        
+        # Временные тренды
+        time_stats = db.query(
+            func.date(Order.creation_time).label('period'),
+            func.count(Order.id).label('count'),
+            func.sum(Order.order_price).label('total')
+        ).group_by(func.date(Order.creation_time)).order_by(func.date(Order.creation_time)).all()
+        
+        logger.info(f"Analytics data generated: {total_orders} orders, revenue: {total_revenue}")
+        
+        return {
+            'summary': {
+                'total_orders': total_orders,
+                'total_revenue': float(total_revenue),
+                'avg_order_value': float(total_revenue / total_orders) if total_orders > 0 else 0
+            },
+            'payment_types': [
+                {
+                    'type': stat.payment_type or 'Unknown',
+                    'count': stat.count,
+                    'total': float(stat.total or 0)
+                }
+                for stat in payment_stats
+            ],
+            'top_machines': [
+                {
+                    'machine_code': stat.machine_code or 'Unknown',
+                    'count': stat.count,
+                    'total': float(stat.total or 0)
+                }
+                for stat in machine_stats
+            ],
+            'time_series': [
+                {
+                    'period': stat.period.isoformat() if stat.period else None,
+                    'count': stat.count,
+                    'total': float(stat.total or 0)
+                }
+                for stat in time_stats
+            ]
+        }
+        
+    except SQLAlchemyError as e:
+        logger.error(f"Database error in get_analytics_data", error=str(e))
+        raise handle_database_error("get_analytics_data", "orders", e)
 
 # === ТОКЕНЫ ПОЛЬЗОВАТЕЛЕЙ ===
 
