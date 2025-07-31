@@ -322,7 +322,12 @@ class TelegramAuthService(BaseAuthService):
                     update_data['last_name'] = telegram_data['last_name']
                 
                 if update_data:
-                    user = crud.update_user(db, getattr(user, 'id', 0), update_data)
+                    # Обновляем пользователя напрямую
+                    for key, value in update_data.items():
+                        if hasattr(user, key):
+                            setattr(user, key, value)
+                    db.commit()
+                    db.refresh(user)
                     logger.info(
                         "Updated existing Telegram user",
                         telegram_id=telegram_id,
@@ -341,7 +346,7 @@ class TelegramAuthService(BaseAuthService):
                     'role': 'user'
                 }
                 
-                user = crud.create_telegram_user(db, user_data)
+                user = crud.create_user(db, user_data)
                 
                 logger.info(
                     "Created new Telegram user",
@@ -415,6 +420,18 @@ class TelegramAuthService(BaseAuthService):
             return result
         except:
             return None
+    
+    def verify_telegram_auth(self, auth_data: Dict[str, Any]) -> bool:
+        """
+        Публичный метод для проверки подписи Telegram (для обратной совместимости)
+        
+        Args:
+            auth_data: Данные от Telegram для проверки
+            
+        Returns:
+            bool: True если подпись валидная
+        """
+        return self._verify_telegram_auth(auth_data)
 
 
 # Глобальный экземпляр для использования в приложении

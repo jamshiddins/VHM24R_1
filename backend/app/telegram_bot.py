@@ -642,7 +642,7 @@ class EnhancedTelegramBot:
                     # Безопасно получаем значения из SQLAlchemy объекта
                     user_telegram_id = int(getattr(user, 'telegram_id'))
                     user_username = str(getattr(user, 'username', 'unknown'))
-                    user_id_value = int(getattr(user, 'id'))
+                    user_id_value = self._safe_get_user_id(user, user_id)
                     
                     # Генерируем уникальную ссылку
                     unique_link = await self.generate_unique_user_link(user_id_value)

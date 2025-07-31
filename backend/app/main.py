@@ -53,6 +53,13 @@ from .utils.exceptions import (
     DatabaseError
 )
 from .middleware.error_handler import add_error_handling_middleware
+from .monitoring import (
+    get_monitoring_middleware, 
+    get_metrics, 
+    health_checker, 
+    start_background_monitoring,
+    business_metrics
+)
 
 # Настройка логирования
 setup_logging()
@@ -66,6 +73,9 @@ app = FastAPI(
 
 # Добавляем middleware для обработки ошибок
 add_error_handling_middleware(app)
+
+# Добавляем monitoring middleware
+app.add_middleware(get_monitoring_middleware())
 
 # CORS middleware
 app.add_middleware(
@@ -117,6 +127,13 @@ async def startup_event():
             logger.warning("TELEGRAM_BOT_TOKEN not found, skipping bot initialization")
     except Exception as e:
         logger.error("Failed to start Telegram bot", error=str(e))
+    
+    # Запускаем фоновый мониторинг
+    try:
+        await start_background_monitoring()
+        logger.info("Background monitoring started successfully")
+    except Exception as e:
+        logger.error("Failed to start background monitoring", error=str(e))
     
     logger.info("VHM24R application startup completed successfully")
 
@@ -241,8 +258,46 @@ async def health_check(db: Session = Depends(get_db)):
         "services": services
     }
 
+@app.get("/metrics")
+async def prometheus_metrics():
+    """Prometheus метрики"""
+    from fastapi.responses import Response
+    metrics_data = get_metrics()
+    return Response(content=metrics_data, media_type="text/plain")
+
+@app.get("/health/detailed")
+async def detailed_health_check():
+    """Детальная проверка здоровья системы"""
+    try:
+        health_results = await health_checker.run_all_checks()
+        
+        overall_status = "healthy"
+        if any(check.status == "unhealthy" for check in health_results.values()):
+            overall_status = "unhealthy"
+        elif any(check.status == "degraded" for check in health_results.values()):
+            overall_status = "degraded"
+        
+        return {
+            "status": overall_status,
+            "timestamp": datetime.utcnow().isoformat(),
+            "version": "1.0.1",
+            "checks": {name: {
+                "status": check.status,
+                "response_time_ms": check.response_time_ms,
+                "details": check.details,
+                "error": check.error
+            } for name, check in health_results.items()}
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "timestamp": datetime.utcnow().isoformat(),
+            "version": "1.0.1",
+            "error": str(e)
+        }
+
 # Подключаем роутеры API
-from .api import auth, auth_v2, orders, analytics, files, export
+from .api import auth, auth_v2, orders, analytics, files, export, system_management
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(auth_v2.router, tags=["Authentication v2.0"])  # Префикс уже в роутере
@@ -250,6 +305,7 @@ app.include_router(orders.router, prefix="/api/v1/orders", tags=["orders"])
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 app.include_router(files.router, prefix="/api/v1/files", tags=["files"])
 app.include_router(export.router, prefix="/api/v1/export", tags=["export"])
+app.include_router(system_management.router, tags=["system"])  # Префикс уже в роутере
 
 # === АУТЕНТИФИКАЦИЯ ===
 

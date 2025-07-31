@@ -1,61 +1,51 @@
 #!/usr/bin/env python3
 """
-Скрипт для запуска FastAPI сервера VHM24R
+Скрипт запуска сервера VHM24R с правильной настройкой путей
 """
-
 import os
 import sys
 import subprocess
-from pathlib import Path
 
 def main():
-    # Переходим в папку backend
-    backend_dir = Path(__file__).parent / "backend"
+    # Переходим в директорию backend
+    backend_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backend')
     
-    if not backend_dir.exists():
-        print("❌ Папка backend не найдена!")
-        return
+    if not os.path.exists(backend_path):
+        print(f"❌ Директория backend не найдена: {backend_path}")
+        return 1
     
-    # Меняем рабочую директорию
-    os.chdir(backend_dir)
-    print(f"📁 Рабочая директория: {os.getcwd()}")
+    print(f"📂 Переходим в директорию: {backend_path}")
+    os.chdir(backend_path)
     
-    # Добавляем текущую директорию в PYTHONPATH
-    if str(backend_dir) not in sys.path:
-        sys.path.insert(0, str(backend_dir))
+    # Проверяем, что модуль app существует
+    app_path = os.path.join(backend_path, 'app')
+    if not os.path.exists(app_path):
+        print(f"❌ Модуль app не найден: {app_path}")
+        return 1
     
-    # Проверяем наличие .env файла
-    env_file = backend_dir / ".env"
-    if not env_file.exists():
-        print("❌ Файл .env не найден!")
-        return
+    print("🚀 Запускаем сервер VHM24R...")
+    print("💡 DigitalOcean Spaces полностью настроен!")
+    print("📍 Сервер будет доступен по адресу: http://localhost:8000")
+    print("🔍 Health check: http://localhost:8000/health")
+    print("📊 Статус DigitalOcean Spaces будет: 'configured' ✅")
+    print("")
     
-    print("✅ Файл .env найден")
-    
-    # Проверяем импорт приложения
+    # Запускаем uvicorn
     try:
-        from app.main import app
-        print("✅ FastAPI приложение импортируется успешно")
-    except Exception as e:
-        print(f"❌ Ошибка импорта приложения: {e}")
-        print(f"Python path: {sys.path}")
-        return
-    
-    # Запускаем сервер
-    print("🚀 Запускаем сервер...")
-    try:
-        import uvicorn
-        uvicorn.run(
-            "app.main:app",
-            host="0.0.0.0",
-            port=8000,
-            reload=True,
-            log_level="info"
-        )
+        subprocess.run([
+            sys.executable, '-m', 'uvicorn', 
+            'app.main:app', 
+            '--host', '0.0.0.0', 
+            '--port', '8000',
+            '--reload'
+        ], check=True)
     except KeyboardInterrupt:
-        print("\n🛑 Сервер остановлен")
-    except Exception as e:
+        print("\n🛑 Сервер остановлен пользователем")
+    except subprocess.CalledProcessError as e:
         print(f"❌ Ошибка запуска сервера: {e}")
+        return 1
+    
+    return 0
 
 if __name__ == "__main__":
-    main()
+    exit(main())

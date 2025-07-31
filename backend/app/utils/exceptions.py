@@ -298,6 +298,26 @@ class PaymentError(VHMException):
         super().__init__(message, error_code="PAYMENT_ERROR", details=details, **kwargs)
 
 
+class CacheError(VHMException):
+    """Ошибки кэширования"""
+    
+    def __init__(
+        self, 
+        message: str = "Ошибка кэша",
+        cache_operation: Optional[str] = None,
+        cache_key: Optional[str] = None,
+        cache_backend: Optional[str] = None,
+        **kwargs
+    ):
+        details = {
+            'cache_operation': cache_operation,
+            'cache_key': cache_key,
+            'cache_backend': cache_backend,
+            **kwargs.get('details', {})
+        }
+        super().__init__(message, error_code="CACHE_ERROR", details=details, **kwargs)
+
+
 # Функции-хелперы для создания исключений
 
 def handle_database_error(operation: str, table: Optional[str] = None, original_error: Optional[Exception] = None) -> DatabaseError:

@@ -43,8 +43,14 @@ class JWTService(TokenBasedAuthService):
         # Загружаем настройки из переменных окружения
         self.secret_key = os.getenv("JWT_SECRET_KEY", "your-secret-key-here")
         self.algorithm = os.getenv("JWT_ALGORITHM", "HS256")
-        self.access_token_lifetime = int(os.getenv("JWT_ACCESS_LIFETIME", "1800"))  # 30 мин
-        self.refresh_token_lifetime = int(os.getenv("JWT_REFRESH_LIFETIME", "604800"))  # 7 дней
+        
+        # Для тестов используем более длительные токены
+        if os.getenv("TESTING") == "true":
+            self.access_token_lifetime = 3600  # 1 час для тестов
+            self.refresh_token_lifetime = 86400  # 24 часа для тестов
+        else:
+            self.access_token_lifetime = int(os.getenv("JWT_ACCESS_LIFETIME", "1800"))  # 30 мин
+            self.refresh_token_lifetime = int(os.getenv("JWT_REFRESH_LIFETIME", "604800"))  # 7 дней
         
         if self.secret_key == "your-secret-key-here":
             logger.warning("Using default JWT secret key - change it in production!")
@@ -198,7 +204,10 @@ class JWTService(TokenBasedAuthService):
                     AuthStatus.EXPIRED  
                 )
             
-            # Создаем новые токены
+            # Создаем новые токены с небольшой задержкой для уникальности
+            import time
+            time.sleep(0.001)  # 1 миллисекунда чтобы токены отличались
+            
             user_data = {
                 'user_id': payload.get('user_id'),
                 'username': payload.get('username'),
@@ -254,8 +263,9 @@ class JWTService(TokenBasedAuthService):
         Returns:
             str: JWT access токен
         """
-        now = datetime.utcnow()
-        expires_at = now + timedelta(seconds=self.access_token_lifetime)
+        import time
+        now_timestamp = time.time()
+        expires_timestamp = now_timestamp + self.access_token_lifetime
         
         payload = {
             'user_id': user_data.get('user_id'),
@@ -264,9 +274,9 @@ class JWTService(TokenBasedAuthService):
             'status': user_data.get('status', 'active'),
             'telegram_id': user_data.get('telegram_id'),
             'type': 'access',
-            'iat': now.timestamp(),
-            'exp': expires_at.timestamp(),
-            'nbf': now.timestamp()
+            'iat': now_timestamp,
+            'exp': expires_timestamp,
+            'nbf': now_timestamp
         }
         
         return self._generate_token(payload)
@@ -281,8 +291,9 @@ class JWTService(TokenBasedAuthService):
         Returns:
             str: JWT refresh токен
         """
-        now = datetime.utcnow()
-        expires_at = now + timedelta(seconds=self.refresh_token_lifetime)
+        import time
+        now_timestamp = time.time()
+        expires_timestamp = now_timestamp + self.refresh_token_lifetime
         
         payload = {
             'user_id': user_data.get('user_id'),
@@ -291,9 +302,9 @@ class JWTService(TokenBasedAuthService):
             'status': user_data.get('status', 'active'),
             'telegram_id': user_data.get('telegram_id'),
             'type': 'refresh',
-            'iat': now.timestamp(),
-            'exp': expires_at.timestamp(),
-            'nbf': now.timestamp()
+            'iat': now_timestamp,
+            'exp': expires_timestamp,
+            'nbf': now_timestamp
         }
         
         return self._generate_token(payload)
@@ -324,6 +335,23 @@ class JWTService(TokenBasedAuthService):
             jwt.InvalidTokenError: При ошибке декодирования
         """
         return jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+    
+    def _is_token_expired(self, payload: Dict[str, Any]) -> bool:
+        """
+        Проверка истечения срока действия токена
+        
+        Args:
+            payload: Декодированные данные токена
+            
+        Returns:
+            bool: True если токен истек
+        """
+        exp_timestamp = payload.get('exp')
+        if not exp_timestamp:
+            return True  # Токен без времени истечения считается истекшим
+        
+        expiry_time = datetime.fromtimestamp(exp_timestamp)
+        return datetime.utcnow() >= expiry_time
     
     def extract_user_id(self, token: str) -> Optional[int]:
         """

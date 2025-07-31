@@ -8,17 +8,22 @@
 - SessionAuthService - управление сессиями
 """
 
-from .base_auth import BaseAuthService, AuthResult
-from .jwt_auth import JWTService
-from .telegram_auth import TelegramAuthService
-from .session_auth import SessionAuthService
+from .base_auth import BaseAuthService, AuthResult, AuthStatus, AuthCredentials
+from .jwt_auth import JWTService, JWTCredentials
+from .telegram_auth import TelegramAuthService, TelegramCredentials
+from .session_auth import SessionAuthService, SessionCredentials
 
 __all__ = [
     'BaseAuthService',
-    'AuthResult', 
+    'AuthResult',
+    'AuthStatus',
+    'AuthCredentials',
     'JWTService',
+    'JWTCredentials',
     'TelegramAuthService',
-    'SessionAuthService'
+    'TelegramCredentials',
+    'SessionAuthService',
+    'SessionCredentials'
 ]
 
 # Версия API аутентификации

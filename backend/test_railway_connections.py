@@ -228,17 +228,13 @@ class RailwayConnectionTester:
                     # Проверяем верификацию
                     payload = secure_jwt_service.verify_token(test_token, TokenType.ACCESS)
                     
-                    jwt_redis_status.update({
-                        'token_creation': 'successful',
-                        'token_verification': 'successful',
-                        'user_id_match': 'successful' if str(payload.get('sub')) == '999' else 'failed'
-                    })
+                    jwt_redis_status['token_creation'] = 'successful'
+                    jwt_redis_status['token_verification'] = 'successful'
+                    jwt_redis_status['user_id_match'] = payload.get('sub') == '999'
                     
                 except Exception as token_error:
-                    jwt_redis_status.update({
-                        'token_creation': 'failed',
-                        'token_error': str(token_error)
-                    })
+                    jwt_redis_status['token_creation'] = 'failed'
+                    jwt_redis_status['token_error'] = str(token_error)
             
             # Проверяем blacklist функциональность
             try:

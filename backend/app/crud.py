@@ -539,6 +539,70 @@ def cleanup_expired_sessions(db: Session):
     db.commit()
     return len(expired_sessions)
 
+# === ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ТЕСТОВ ===
+
+def create_telegram_user(db: Session, user_data: dict) -> User:
+    """Alias for create_user for backward compatibility"""
+    return create_user(db, user_data)
+
+def get_user(db: Session, user_id: int) -> Optional[User]:
+    """Alias for get_user_by_id"""
+    return get_user_by_id(db, user_id)
+
+def update_user(db: Session, user_id: int, update_data: dict) -> Optional[User]:
+    """Update user data"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        for key, value in update_data.items():
+            if hasattr(user, key) and value is not None:
+                setattr(user, key, value)
+        setattr(user, 'updated_at', datetime.utcnow())
+        db.commit()
+        db.refresh(user)
+    return user
+
+def delete_user(db: Session, user_id: int) -> bool:
+    """Delete user by ID"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        db.delete(user)
+        db.commit()
+        return True
+    return False
+
+def get_user_by_username(db: Session, username: str) -> Optional[User]:
+    """Get user by username"""
+    return db.query(User).filter(User.username == username).first()
+
+def get_users(db: Session, skip: int = 0, limit: int = 100) -> List[User]:
+    """Get users with pagination"""
+    return db.query(User).offset(skip).limit(limit).all()
+
+def get_orders(db: Session, skip: int = 0, limit: int = 100) -> List[Order]:
+    """Get orders with pagination"""
+    return db.query(Order).offset(skip).limit(limit).all()
+
+def delete_order(db: Session, order_id: int) -> bool:
+    """Delete order by ID"""
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if order:
+        db.delete(order)
+        db.commit()
+        return True
+    return False
+
+def get_orders_by_user(db: Session, user_id: int) -> List[Order]:
+    """Get orders by user ID"""
+    return db.query(Order).filter(Order.created_by == user_id).all()
+
+def create_file_upload(db: Session, upload_data: dict) -> UploadedFile:
+    """Create file upload record"""
+    return create_uploaded_file(db, upload_data)
+
+def get_orders_by_upload(db: Session, upload_id: int) -> List[Order]:
+    """Get orders by upload file ID"""
+    return db.query(Order).filter(Order.source_file_id == upload_id).all()
+
 # Глобальные экземпляры CRUD
 order_crud = OrderCrud()
 order_change_crud = OrderChangeCrud()

@@ -5,7 +5,7 @@ from ..auth import get_current_user
 from ..models import User
 from ..telegram_auth import TelegramAuth
 from .. import crud
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pydantic import BaseModel
 import hashlib
 
@@ -13,8 +13,68 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class TelegramAuthData(BaseModel):
+    id: str
+    first_name: str
+    username: Optional[str] = None
+    last_name: Optional[str] = None
+    auth_date: Optional[str] = None
+    hash: str
+
 router = APIRouter()
 telegram_auth = TelegramAuth()
+
+@router.post("/telegram/login")
+async def telegram_login(
+    auth_data: TelegramAuthData,
+    db: Session = Depends(get_db)
+):
+    """Telegram авторизация"""
+    try:
+        # Верифицируем Telegram данные
+        if not telegram_auth.verify_auth_data(auth_data.dict()):
+            raise HTTPException(status_code=401, detail={"error": "Invalid Telegram authentication"})
+        
+        telegram_id = int(auth_data.id)
+        
+        # Получаем или создаем пользователя
+        user = crud.get_user_by_telegram_id(db, telegram_id)
+        
+        if not user:
+            # Создаем нового пользователя
+            user_data = {
+                'telegram_id': telegram_id,
+                'username': auth_data.username,
+                'first_name': auth_data.first_name,
+                'last_name': auth_data.last_name,
+                'status': 'pending'  # По умолчанию требует одобрения
+            }
+            user = crud.create_user(db, user_data)
+        
+        # Проверяем статус пользователя
+        if str(user.status) != 'approved':
+            raise HTTPException(status_code=401, detail={"error": "User not approved"})
+        
+        # Генерируем токен
+        access_token = telegram_auth.create_access_token(getattr(user, 'id'))
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "telegram_id": user.telegram_id,
+                "username": user.username,
+                "first_name": user.first_name,
+                "status": user.status,
+                "role": user.role
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
 
 @router.post("/login")
 async def login(
@@ -65,6 +125,26 @@ async def login(
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/validate")
+async def validate_token(current_user: User = Depends(get_current_user)):
+    """Валидация токена"""
+    return {
+        "valid": True,
+        "user": {
+            "id": current_user.id,
+            "telegram_id": current_user.telegram_id,
+            "username": current_user.username,
+            "first_name": current_user.first_name,
+            "status": current_user.status,
+            "role": current_user.role
+        }
+    }
+
+@router.post("/logout")
+async def logout():
+    """Выход из системы"""
+    return {"message": "Successfully logged out"}
 
 @router.post("/telegram/verify")
 async def verify_telegram_token(
