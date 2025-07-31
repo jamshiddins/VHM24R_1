@@ -171,10 +171,10 @@ templates = Jinja2Templates(directory=str(templates_path))
 
 @app.get("/")
 async def root():
-    """Главная страница - возвращает frontend"""
-    frontend_file = frontend_path / "index.html"
-    if frontend_file.exists():
-        return FileResponse(str(frontend_file), media_type="text/html")
+    """Главная страница - возвращает webapp напрямую"""
+    webapp_file = Path(__file__).parent.parent / "templates" / "webapp.html"
+    if webapp_file.exists():
+        return FileResponse(str(webapp_file), media_type="text/html")
     return {"message": "VHM24R API is running", "version": "1.0.0"}
 
 @app.get("/health")
