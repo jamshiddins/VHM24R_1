@@ -18,15 +18,38 @@ class EnhancedTelegramBot:
         self.telegram_auth = TelegramAuth()
         self.simple_auth = SimpleDynamicAuth()
         
-        # ЕДИНСТВЕННЫЙ АДМИН - @Jamshiddin
+        # ЕДИНСТВЕННЫЙ АДМИН - получаем из переменных окружения
         self.ADMIN_USERNAME = "Jamshiddin"
-        self.ADMIN_TELEGRAM_ID = 42283329  # Ваш Telegram ID
+        self.ADMIN_TELEGRAM_ID = int(os.getenv('ADMIN_TELEGRAM_ID', 42283329))
         self.ADMIN_CHAT_ID = None  # Будет установлен при первом обращении
         
         # Открытая система - любой может подать заявку
         self.OPEN_REGISTRATION = True
         
         self.setup_handlers()
+    
+    def _safe_get_user_id(self, user_obj, fallback_id: int = 1) -> int:
+        """Безопасно извлекает ID пользователя из SQLAlchemy объекта"""
+        try:
+            if hasattr(user_obj, 'id'):
+                user_id_value = user_obj.id
+                # Если это обычный int или str
+                if isinstance(user_id_value, (int, str)):
+                    return int(user_id_value)
+                # Если у объекта есть метод __int__
+                elif hasattr(user_id_value, '__int__'):
+                    return int(user_id_value)
+                # Если это SQLAlchemy объект с scalar()
+                elif hasattr(user_id_value, 'scalar'):
+                    return int(user_id_value.scalar())
+                else:
+                    # Попробуем получить атрибут напрямую
+                    return int(getattr(user_obj, 'id'))
+            else:
+                return fallback_id
+        except (ValueError, AttributeError, TypeError) as e:
+            print(f"⚠️ Warning: Could not extract user ID, using fallback: {e}")
+            return fallback_id
     
     def setup_handlers(self):
         """Настройка обработчиков команд"""
@@ -289,7 +312,8 @@ class EnhancedTelegramBot:
         """Пользовательское меню"""
         
         # Генерируем уникальную ссылку для пользователя
-        unique_link = await self.generate_unique_user_link(user_data.id)
+        user_id_int = self._safe_get_user_id(user_data, 1)
+        unique_link = await self.generate_unique_user_link(user_id_int)
         
         user_text = f"""
 ✅ <b>Добро пожаловать, {user_data.first_name}!</b>
@@ -755,7 +779,8 @@ class EnhancedTelegramBot:
                 return
             
             # Генерируем ссылку
-            login_link = await self.generate_unique_user_link(int(db_user.id))
+            user_id_int = self._safe_get_user_id(db_user, user.id)
+            login_link = await self.generate_unique_user_link(user_id_int)
             
             # Отправляем ссылку
             link_message = f"""
@@ -856,7 +881,8 @@ class EnhancedTelegramBot:
         """Обновление ссылки пользователя"""
         
         # Генерируем новую уникальную ссылку
-        new_link = await self.generate_unique_user_link(int(user_data.id))
+        user_id_int = self._safe_get_user_id(user_data, query.from_user.id)
+        new_link = await self.generate_unique_user_link(user_id_int)
         
         refresh_text = f"""
 🔄 <b>Ссылка обновлена!</b>
@@ -960,7 +986,7 @@ class EnhancedTelegramBot:
     async def admin_login_to_system(self, query):
         """Вход админа в систему с логином и паролем"""
         # Генерируем ссылку для админа используя TELEGRAM_ID, а не CHAT_ID
-        admin_link = await self.generate_unique_user_link(int(self.ADMIN_TELEGRAM_ID))
+        admin_link = await self.generate_unique_user_link(self.ADMIN_TELEGRAM_ID)
         
         # Генерируем логин и пароль для админа
         admin_login = "admin"
